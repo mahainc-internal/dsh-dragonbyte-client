@@ -12,12 +12,7 @@ window.__ModuleLoader__.load({
       'Paired': '已配对',
       'Not paired yet.': '尚未配对。',
       'Open Google sign-in in your browser, approve this machine, then come back.': '在浏览器中打开 Google 登录，批准此机器后返回。',
-      'Tenant': '租户',
       'MCP servers': 'MCP 服务器',
-      'One per line: name: command, or name: https URL.': '每行一个：name: 命令，或 name: https URL。',
-      'Save servers': '保存服务器',
-      'Saving…': '正在保存…',
-      'Saved': '已保存',
       'Reconnect': '重新连接',
       'Disconnect': '断开连接',
       'Connected': '已连接',
@@ -27,8 +22,6 @@ window.__ModuleLoader__.load({
       'Edit servers on DragonByte': '在 DragonByte 上编辑服务器',
       'Could not reach the local host.': '无法连接本地主机。',
       'Could not pair. Try again.': '无法配对，请重试。',
-      'Could not save. Check the format and retry.': '无法保存，请检查格式后重试。',
-      'Revoke': '撤销',
       'Revoking…': '正在撤销…',
     };
     const en = Object.fromEntries(Object.keys(zh).map((key) => [key, key]));
@@ -42,7 +35,6 @@ window.__ModuleLoader__.load({
       .dsh-dragonbyte .row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; min-width: 0; padding: 16px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); }
       .dsh-dragonbyte .detail { flex: 1 1 200px; min-width: 0; }
       .dsh-dragonbyte .muted { margin: 0; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
-      .dsh-dragonbyte textarea { width: 100%; min-height: 96px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); }
       .dsh-dragonbyte .actions { display: flex; flex-wrap: wrap; gap: 12px; }
       .dsh-dragonbyte .link { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 7px 14px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); font-size: 13px; text-decoration: none; }
       .dsh-dragonbyte .link:hover { background: var(--dsw-alias-interactive-bg-hover); }

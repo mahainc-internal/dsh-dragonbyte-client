@@ -1,0 +1,3 @@
+- insert:
+    - id: dragonbyte
+      name: '@snapai/dsh-dragonbyte-client'

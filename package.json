@@ -1,19 +1,38 @@
 {
   "name": "@snapai/dsh-dragonbyte-client",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Share the MCP servers on your own machine with a DSH tenant",
   "exports": {
-    "./host": "./src/host.mjs"
+    ".": "./src/desktop.mjs",
+    "./host": "./src/host.mjs",
+    "./client": "./client.js"
   },
   "bin": {
     "dsh-dragonbyte-host": "./src/host-main.mjs"
   },
   "files": [
     "src",
+    "client.js",
+    "cordis.patch.yml",
     "README.md",
     "LICENSE"
   ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
   "engines": {
     "node": ">=22.5"
   },

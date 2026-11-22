@@ -4,15 +4,41 @@ Share the MCP servers running on **your own machine** with a DSH tenant, without
 opening a port, without a public name, and without moving the servers off your
 laptop.
 
+Two ways to run it, and they install differently:
+
+| Where | What you get | How it installs |
+| --- | --- | --- |
+| a DSH Desktop (or any DSH Host) | `Settings -> Local MCP`, with pairing, server list and status | as a DSH **plugin bundle** |
+| a plain machine | a headless host process | `npx -y github:mahainc-internal/dsh-dragonbyte-client` |
+
+## In DSH Desktop
+
+```
+Plugin Manager -> install  github:mahainc-internal/dsh-dragonbyte-client
+Settings -> Local MCP -> Pair this machine
+```
+
+Pairing opens your browser on `edge01.snapai.app`, where you sign in with the
+Google account that owns the tenant. Approve it and the machine comes back
+paired; enter your MCP servers and they are bridged. There is nothing to copy and
+no token to paste.
+
+⚠ **The browser step is not optional, and it cannot happen inside the app.** A
+desktop shell serves its UI from an `app://` origin, which Firebase will never
+accept as an authorized domain. The pairing page is therefore served by the
+bridge on `edge01.snapai.app`; the app only opens it and waits on `127.0.0.1` for
+the one-time code that comes back.
+
+## On a plain machine
+
 ```sh
-# 1. in DSH: Settings -> Local MCP, enter your servers, Create token
-# 2. here, once:
+# in a DSH tenant: Settings -> Local MCP -> Create token, then:
 npx -y github:mahainc-internal/dsh-dragonbyte-client
 #    paste the token; answer once for each MCP server
 ```
 
-After that the credential is saved in `~/.config/dsh-dragonbyte/credential.json`
-and the host renews its own token before it expires. Nothing else to run.
+The credential is saved in `~/.config/dsh-dragonbyte/credential.json` and the
+host renews its own token before it expires.
 
 ## What it does
 
@@ -36,12 +62,12 @@ OAuth-protected servers, and anything that is not one of the two rows above.
 
 Limits worth knowing before you plan around them:
 
-- **16 servers** per machine, **32 tools' worth of catalog**; a name must match
-  `[a-z][a-z0-9-]{0,31}`.
+- **16 servers** per machine; a name must match `[a-z][a-z0-9-]{0,31}`.
 - **A tool result over 4 MiB is refused.** Serving large files as base64 through
   this path will not work.
 - **A server that fails to connect is skipped**, and the others still serve. If
-  none connect, the host exits rather than binding a tenant to nothing.
+  none connect, the host publishes nothing rather than binding a tenant to a
+  machine that can do nothing.
 - **Calls are at-most-once.** A timed-out call is reported as "may have run" and
   is never retried, because a local MCP tool is an arbitrary side effect.
 
@@ -49,18 +75,13 @@ Limits worth knowing before you plan around them:
 
 | What | Where |
 | --- | --- |
-| MCP servers, tenant binding, revocation | the DSH gateway, written from `Settings -> Local MCP` |
-| `token`, `refreshToken`, `expiresAt`, `tenantId` | `~/.config/dsh-dragonbyte/credential.json` (0600) |
-
-The server list is fetched from the gateway each time the host starts, so
-editing it in Settings takes effect on the next start — there is nothing to edit
-on this machine. Note that a server's `env` and `headers` are stored on the
-gateway, not just here; do not put a secret in one you would not want stored
-server-side.
+| the device token and tenant binding | `~/.config/dsh-dragonbyte/credential.json` (0600) |
+| the MCP server list | the same file |
+| revocation | the DSH host, from `Settings -> Local MCP -> Disconnect` |
 
 Override the config location with `DSH_DRAGONBYTE_CONFIG_DIR`.
 
-## Run it
+## Run it headless
 
 ```sh
 # first run: reads the token from the prompt (or DSH_DRAGONBYTE_TOKEN)
@@ -83,13 +104,16 @@ for input — which is what lets it run under a supervisor or a login item.
 
 ## Revoking a machine
 
-Settings -> Local MCP -> Revoke. The bridge re-reads the revocation list on its
-15-second sweep and closes an already-open socket, so the tenant's tools go away
-within about half a minute rather than when the machine happens to reconnect.
+`Settings -> Local MCP -> Disconnect`. The bridge re-reads its revocation list on
+its 15-second sweep and closes an already-open socket, so the tenant's tools go
+away within about half a minute rather than when the machine happens to
+reconnect.
 
 ## Requirements
 
 Node.js **>= 22.5** (the global `WebSocket`, and `@modelcontextprotocol/client`).
+The DSH Host provides its own runtime, so an installed bundle needs nothing on
+the machine's `PATH`.
 
 ## Develop
 
@@ -98,9 +122,10 @@ npm ci
 npm test
 ```
 
-The tests cover the socket protocol, the credential file, the settings exchange
-and the no-prompt exit path. The Settings panel itself lives in the tenant-side
-`dsh-dragonbyte` package, not here.
+The tests cover the socket protocol, the credential file, the settings exchange,
+the no-prompt exit path, and how the pairing page URL is built. The pairing
+endpoint, the Firebase token check and the device store live in the tenant-side
+[`dsh-dragonbyte`](../dsh-dragonbyte) package, because they run on edge01.
 
 ## License
 

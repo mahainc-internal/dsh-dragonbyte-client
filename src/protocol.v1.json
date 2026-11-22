@@ -1,0 +1,72 @@
+{
+  "$id": "dsh-dragonbyte/protocol.v1",
+  "title": "DSH Dragonbyte protocol, version 1",
+  "description": "The frames of all three hops, in one artifact so a host, a bridge and a tenant cannot disagree about them. ⚠ additionalProperties IS ABSENT AND MUST STAY ABSENT, for the reason dsh-wire's envelope gives: the three halves deploy independently -- a laptop can run an old host against a new bridge, and a tenant's bundle is an immutable archive -- so version skew is a certainty. A strict frame turns an additive field on the newer side into a total outage on the older one. ⚠ `v` IS `minimum: 1`, NOT `const: 1`. The explicit version check runs FIRST and answers `unsupported wire version`; a const here would make that check unreachable and report skew as corruption.",
+  "type": "object",
+  "required": ["v", "type"],
+  "properties": {
+    "v": { "type": "integer", "minimum": 1, "description": "Protocol version. A breaking change is a new v, never a mutated field." },
+    "type": {
+      "type": "string",
+      "enum": ["catalog", "tenants", "call", "reply", "ping", "error", "refresh", "refreshed", "config", "servers"],
+      "description": "Which frame this is. The set is closed: an unknown type is refused by the receiver rather than ignored, because a silently dropped frame looks like a slow peer."
+    },
+    "token": { "type": "string", "minLength": 32, "maxLength": 4096, "description": "A refresh token, exchanged for a new device token. ⚠ CARRIED ON ITS OWN FRAME, not in an Authorization header: the socket is already open under the expiring device token, and re-opening it would drop every in-flight call." },
+    "expiresAt": { "type": "integer", "minimum": 1, "description": "Unix seconds at which the issued device token stops being accepted. Persisted by the host so it can refresh before, not after, the bridge refuses it." },
+    "email": { "type": "string", "pattern": "^[^\\s@]{1,64}@[^\\s@]{1,190}$" },
+    "tenantId": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" },
+    "tenants": { "type": "array", "maxItems": 32, "items": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" } },
+    "catalog": { "type": "object" },
+    "servers": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "The MCP servers Settings saved for this machine. ⚠ THE HOST ASKS FOR THESE INSTEAD OF THE GATEWAY. It holds a device token, not a browser session, so the browser's `/dragonbyte/mcp` route is unreachable to it; the bridge reads the same document the gateway wrote and answers over the socket the host already has open.",
+      "items": {
+        "type": "object",
+        "required": ["name", "transport"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+          "label": { "type": "string", "maxLength": 64 },
+          "transport": { "type": "string", "enum": ["stdio", "http"] },
+          "command": { "type": "string", "maxLength": 512 },
+          "args": { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 2048 } },
+          "env": { "type": "object" },
+          "url": { "type": "string", "maxLength": 2048 },
+          "headers": { "type": "object" }
+        }
+      }
+    },
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,128}$" },
+    "server": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+    "tool": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" },
+    "args": { "type": "object" },
+    "result": { "type": "object" },
+    "error": { "type": "string", "maxLength": 512 },
+    "requestId": { "type": "string", "pattern": "^dragonbyte-[0-9]{1,9}$", "description": "The sidecar's correlation token. Its shape is fixed by the shim so a bridge cannot answer an id the shim would never mint." },
+    "path": { "type": "string", "pattern": "^/[a-z0-9/_-]{1,120}$", "description": "The bridge route a shim request names. ⚠ A PATTERN, NOT AN `enum` OF THE TWO KNOWN ROUTES. An enum would make the bridge's own `not found` answer unreachable — every unknown path would fail here as a 400 and the 404 branch would be dead code that no test could exercise. dsh-wire's envelope makes the same choice for `kind`, and its `v` is `minimum` rather than `const` for the same reason." },
+    "status": { "type": "integer", "minimum": 200, "maximum": 599 },
+    "body": { "type": "object" }
+  },
+  "frames": {
+    "host-to-bridge": {
+      "catalog": { "required": ["catalog"], "properties": ["v", "type", "email", "tenantId", "catalog"] },
+      "ping": { "required": [], "properties": ["v", "type"] },
+      "reply": { "required": ["id", "result"], "properties": ["v", "type", "id", "result"] },
+      "refresh": { "required": ["token"], "properties": ["v", "type", "token"] },
+      "config": { "required": [], "properties": ["v", "type"] }
+    },
+    "bridge-to-host": {
+      "call": { "required": ["id", "server", "tool"], "properties": ["v", "type", "id", "server", "tool", "args"] },
+      "tenants": { "required": ["tenants"], "properties": ["v", "type", "email", "tenants"] },
+      "error": { "required": ["error"], "properties": ["v", "type", "error"] },
+      "refreshed": { "required": ["token", "expiresAt"], "properties": ["v", "type", "token", "expiresAt"] },
+      "servers": { "required": ["servers"], "properties": ["v", "type", "servers"] }
+    },
+    "shim-to-bridge": {
+      "request": { "required": ["requestId", "path"], "properties": ["requestId", "path", "body"] }
+    },
+    "bridge-to-shim": {
+      "result": { "required": ["requestId", "status", "body"], "properties": ["requestId", "status", "body"] }
+    }
+  }
+}

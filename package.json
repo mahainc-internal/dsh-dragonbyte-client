@@ -1,0 +1,41 @@
+{
+  "name": "@snapai/dsh-dragonbyte-client",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Share the MCP servers on your own machine with a DSH tenant",
+  "exports": {
+    "./host": "./src/host.mjs"
+  },
+  "bin": {
+    "dsh-dragonbyte-host": "./src/host-main.mjs"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "test": "node --test --test-timeout=30000"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.2.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mahainc-internal/dsh-dragonbyte-client.git"
+  },
+  "homepage": "https://github.com/mahainc-internal/dsh-dragonbyte-client#readme",
+  "bugs": {
+    "url": "https://github.com/mahainc-internal/dsh-dragonbyte-client/issues"
+  },
+  "keywords": [
+    "mcp",
+    "dsh",
+    "modelcontextprotocol",
+    "cli"
+  ]
+}

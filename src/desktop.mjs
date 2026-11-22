@@ -151,7 +151,9 @@ function apply(ctx, config = {}) {
    * closes on the first use or the window's end.
    */
   async function pair({ tenantId }) {
-    if (!tenantId) throw Object.assign(new Error('a tenant is required to pair'), { status: 400 });
+    // ⚠ AN EMPTY TENANT IS THE NORMAL FIRST PAIRING. Which tenants the account
+    // owns is a registry answer that only exists after sign-in, so the page is
+    // opened without one and asks there; the choice comes back on its own POST.
     if (state.pairing) state.pairing.close();
     const received = new Promise((resolve, reject) => {
       const listener = createServer((req, res) => {

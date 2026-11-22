@@ -149,7 +149,6 @@ window.__ModuleLoader__.load({
       }
 
       const statusLabel = STATUS_LABEL[state.status] || 'Not connected';
-      const tenantMissing = !state.tenantId;
 
       return h('section', { className: 'dsh-dragonbyte' },
         h('style', null, css),
@@ -165,7 +164,11 @@ window.__ModuleLoader__.load({
                 state.paired ? `${t('Paired')} · ${state.tenantId || '—'} · ${t(statusLabel)}` : t('Not paired yet.')),
               h('p', { className: 'muted' }, t('Open Google sign-in in your browser, approve this machine, then come back.'))),
             h('div', { className: 'actions' },
-              h('button', { type: 'button', disabled: busy !== '' || tenantMissing, onClick: () => void pair() },
+              // ⚠ ENABLED WITH NO TENANT KNOWN, DELIBERATELY. Which tenant an
+              // address owns is answered only after sign-in, on the pairing
+              // page, so requiring one here would make the flow impossible to
+              // start. An already-paired machine keeps its tenant.
+              h('button', { type: 'button', disabled: busy !== '', onClick: () => void pair() },
                 busy === 'pair' ? t('Pairing…') : t('Pair this machine')),
               state.paired ? h('button', { type: 'button', disabled: busy !== '', onClick: () => void disconnect() },
                 busy === 'revoke' ? t('Revoking…') : t('Disconnect')) : null))),

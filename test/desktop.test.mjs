@@ -27,3 +27,13 @@ test('a configured bridge replaces the default, and `ws` becomes `http` for the 
   assert.equal(bridgeUrlOf({ DSH_DRAGONBYTE_BRIDGE: 'wss://example.test/dragonbyte/ws' }), 'wss://example.test/dragonbyte/ws');
   assert.equal(bridgeUrlOf({}), 'wss://edge01.snapai.app/dragonbyte/ws');
 });
+
+test('an editor link carries a code and no callback, because the page refuses both together', () => {
+  // ⚠ THE PAGE TREATS `code` AS EDITOR MODE ONLY WHEN NO `callback` ACCOMPANIES
+  // IT; with both it runs as a pairing attempt and refuses a non-loopback
+  // callback. An empty parameter is still a parameter, so it must be absent.
+  const url = new URL(pairPageUrl({ bridgeUrl: 'wss://edge01.snapai.app/dragonbyte/ws', code: 'c'.repeat(43) }));
+  assert.equal(url.searchParams.has('callback'), false);
+  assert.equal(url.searchParams.has('tenant'), false);
+  assert.equal(url.searchParams.get('code'), 'c'.repeat(43));
+});

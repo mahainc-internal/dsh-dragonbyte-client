@@ -51,21 +51,38 @@ const readBody = (req, limit = 256 * 1024) => new Promise((resolve, reject) => {
   req.on('error', reject);
 });
 
-/**
- * The service prefix this DSH is served under, when it has one.
- *
- * ⚠ THE PAIRING PAGE IS SERVED BY THE BRIDGE, SO ONLY THE SERVICE IS NEEDED.
- * Its hostname is the bridge's; this reads the browser's own URL solely to keep
- * a desktop served under a prefix honest about which service it belongs to.
- */
 export function bridgeUrlOf(env = process.env) {
   return env.DSH_DRAGONBYTE_BRIDGE || DEFAULT_BRIDGE;
 }
 
-export function pairPageUrl({ bridgeUrl, tenantId, callback }) {
+/**
+ * Turn a device token into a fresh editor code, or `''` when it cannot.
+ *
+ * ⚠ THE EDITOR CODE IS NOT KEPT, BECAUSE IT CANNOT BE. It is minted by the
+ * bridge, expires in an hour, and lives only in that process's memory; a code
+ * saved beside the credential would be dead by the time a person clicked. The
+ * device token is signed and lasts as long as the link could be wanted.
+ */
+async function editorCodeOf({ bridgeUrl, token }) {
+  if (!token) return '';
+  try {
+    const response = await fetch(`${bridgeUrl.replace(/^ws/, 'http')}/dragonbyte/pair/servers`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }),
+    });
+    if (!response.ok) return '';
+    const body = await response.json();
+    return typeof body?.code === 'string' ? body.code : '';
+  } catch { return ''; }
+}
+
+export function pairPageUrl({ bridgeUrl, tenantId = '', callback = '', code = '' }) {
   const url = new URL('/dragonbyte/pair/start', bridgeUrl.replace(/^ws/, 'http'));
-  url.searchParams.set('tenant', tenantId);
-  url.searchParams.set('callback', callback);
+  // ⚠ ONLY THE PARAMETERS THAT EXIST. An empty `callback` sent along with a code
+  // makes the page think it is a pairing attempt and refuse it as non-loopback,
+  // so the editor link must not carry one.
+  if (tenantId) url.searchParams.set('tenant', tenantId);
+  if (callback) url.searchParams.set('callback', callback);
+  if (code) url.searchParams.set('code', code);
   return url.toString();
 }
 
@@ -114,6 +131,26 @@ function apply(ctx, config = {}) {
       // The credential holds the spec objects `connectServers` takes, so
       // re-parsing them as a `{command|url}` config would read a stdio spec as
       // a server that "needs either command or url".
+      // ⚠ THE LIST IS READ FROM THE EDITOR BEFORE EACH CONNECT. A list saved on
+      // the bridge after this machine last ran is what the person meant; the
+      // copy in the credential is a cache for an offline start.
+      const code = await editorCodeOf({ bridgeUrl, token: state.credential.token });
+      if (code) {
+        try {
+          const url = `${bridgeUrl.replace(/^ws/, 'http')}/dragonbyte/pair/servers?code=${encodeURIComponent(code)}`;
+          const response = await fetch(url, { cache: 'no-store' });
+          if (response.ok) {
+            const body = await response.json();
+            // ⚠ AN EMPTY LIST IS AN ANSWER, NOT A MISS. A person who deletes
+            // every server means to share none; keeping the cached copy would
+            // publish a list they just removed.
+            if (Array.isArray(body?.mcpServers)) {
+              state.credential.mcpServers = body.mcpServers;
+              await saveCredential(state.credential);
+            }
+          }
+        } catch { /* offline: keep the cached list */ }
+      }
       const specs = Array.isArray(state.credential.mcpServers) ? state.credential.mcpServers : [];
       // ⚠ AN EMPTY CATALOG IS NOT PUBLISHED. Binding a tenant to a host that can
       // do nothing is worse than being offline, so a machine with no servers
@@ -151,9 +188,9 @@ function apply(ctx, config = {}) {
    * closes on the first use or the window's end.
    */
   async function pair({ tenantId }) {
-    // ⚠ AN EMPTY TENANT IS THE NORMAL FIRST PAIRING. Which tenants the account
-    // owns is a registry answer that only exists after sign-in, so the page is
-    // opened without one and asks there; the choice comes back on its own POST.
+    // ⚠ AN EMPTY TENANT IS THE NORMAL FIRST PAIRING, AND THE PAGE NAMES NONE.
+    // The device is scoped to the account, so there is nothing to choose; the
+    // bridge checks ownership from the registry on every catalog it publishes.
     if (state.pairing) state.pairing.close();
     const received = new Promise((resolve, reject) => {
       const listener = createServer((req, res) => {
@@ -205,13 +242,23 @@ function apply(ctx, config = {}) {
     credentialPath: credentialPath(),
   });
 
+  /**
+   * ⚠ ONE EDITOR, ON THE BRIDGE. This machine cannot write a server list the
+   * gateway would accept, so Settings opens the page rather than duplicating it.
+   * The link is minted per request because its code is short-lived.
+   */
+  async function editorUrl() {
+    const code = await editorCodeOf({ bridgeUrl, token: state.credential?.token });
+    return pairPageUrl({ bridgeUrl, code });
+  }
+
   const routes = [
     ctx.webServer.register({
       kind: 'prefix', path: '/dragonbyte',
       handler: async (req, res) => {
         const url = new URL(req.url || '/', 'http://host.invalid');
         try {
-          if (url.pathname === '/dragonbyte/status' && req.method === 'GET') return json(res, 200, publicStatus());
+          if (url.pathname === '/dragonbyte/status' && req.method === 'GET') return json(res, 200, { ...publicStatus(), editorUrl: await editorUrl() });
           if (url.pathname === '/dragonbyte/pair' && req.method === 'POST') {
             const body = await readBody(req);
             return json(res, 200, await pair({ tenantId: typeof body?.tenantId === 'string' ? body.tenantId : '' }));

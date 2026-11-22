@@ -8,14 +8,14 @@ Two ways to run it, and they install differently:
 
 | Where | What you get | How it installs |
 | --- | --- | --- |
-| a DSH Desktop (or any DSH Host) | `Settings -> Local MCP`, with pairing, server list and status | as a DSH **plugin bundle** |
+| a DSH Desktop (or any DSH Host) | `Settings -> DragonByte`, with pairing, the bridged servers and status | as a DSH **plugin bundle** |
 | a plain machine | a headless host process | `npx -y github:mahainc-internal/dsh-dragonbyte-client` |
 
 ## In DSH Desktop
 
 ```
 Plugin Manager -> install  github:mahainc-internal/dsh-dragonbyte-client
-Settings -> Local MCP -> Pair this machine
+Settings -> DragonByte -> Pair this machine
 ```
 
 Pairing opens your browser on `edge01.snapai.app`, where you sign in with the
@@ -27,9 +27,12 @@ picker: which tenants an address owns is a registry question the bridge answers
 on every publish, so handing the choice to a person would only be a way to
 answer it wrongly.
 
-**This section does not edit the MCP server list.** `Settings -> Local MCP` on
-edge01 is the one editor, because a device record there is what holds the list.
-Editing it in both places would give one config two writers.
+**The MCP server list is edited in one place, and it is not this section.**
+`Settings -> DragonByte` shows the servers a machine is serving and links to
+**Edit servers on DragonByte**, the bridge's own page, where they are typed and
+saved. That is the one editor: a pair of them would give one config two writers.
+The link carries a code the machine mints from its device token each time the
+section loads, so it never holds a token and never goes stale.
 
 ⚠ **The browser step is not optional, and it cannot happen inside the app.** A
 desktop shell serves its UI from an `app://` origin, which Firebase will never
@@ -40,7 +43,7 @@ the one-time code that comes back.
 ## On a plain machine
 
 ```sh
-# in a DSH tenant: Settings -> Local MCP -> Create token, then:
+# in a DSH tenant: Settings -> DragonByte -> Create token, then:
 npx -y github:mahainc-internal/dsh-dragonbyte-client
 #    paste the token; answer once for each MCP server
 ```
@@ -84,8 +87,8 @@ Limits worth knowing before you plan around them:
 | What | Where |
 | --- | --- |
 | the device token and tenant binding | `~/.config/dsh-dragonbyte/credential.json` (0600) |
-| the MCP server list | `Settings -> Local MCP` on edge01, read here at start |
-| revocation | the DSH host, from `Settings -> Local MCP -> Disconnect` |
+| the MCP server list | the bridge's **Edit servers on DragonByte** page, cached in the credential and re-read at every start |
+| revocation | `Settings -> DragonByte -> Disconnect` |
 
 Override the config location with `DSH_DRAGONBYTE_CONFIG_DIR`.
 
@@ -112,7 +115,7 @@ for input — which is what lets it run under a supervisor or a login item.
 
 ## Revoking a machine
 
-`Settings -> Local MCP -> Disconnect`. The bridge re-reads its revocation list on
+`Settings -> DragonByte -> Disconnect`. The bridge re-reads its revocation list on
 its 15-second sweep and closes an already-open socket, so the tenant's tools go
 away within about half a minute rather than when the machine happens to
 reconnect.

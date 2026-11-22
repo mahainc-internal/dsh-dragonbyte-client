@@ -24,6 +24,7 @@ window.__ModuleLoader__.load({
       'Connecting…': '正在连接…',
       'Not connected': '未连接',
       'No servers configured yet.': '尚未配置服务器。',
+      'Edit servers on DragonByte': '在 DragonByte 上编辑服务器',
       'Could not reach the local host.': '无法连接本地主机。',
       'Could not pair. Try again.': '无法配对，请重试。',
       'Could not save. Check the format and retry.': '无法保存，请检查格式后重试。',
@@ -43,6 +44,8 @@ window.__ModuleLoader__.load({
       .dsh-dragonbyte .muted { margin: 0; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
       .dsh-dragonbyte textarea { width: 100%; min-height: 96px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); }
       .dsh-dragonbyte .actions { display: flex; flex-wrap: wrap; gap: 12px; }
+      .dsh-dragonbyte .link { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 7px 14px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); font-size: 13px; text-decoration: none; }
+      .dsh-dragonbyte .link:hover { background: var(--dsw-alias-interactive-bg-hover); }
       .dsh-dragonbyte button { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 7px 14px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); font: inherit; font-size: 13px; cursor: pointer; }
       .dsh-dragonbyte button:hover { background: var(--dsw-alias-interactive-bg-hover); }
       .dsh-dragonbyte button:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
@@ -136,15 +139,18 @@ window.__ModuleLoader__.load({
               state.paired ? h('button', { type: 'button', disabled: busy !== '', onClick: () => void disconnect() },
                 busy === 'revoke' ? t('Revoking…') : t('Disconnect')) : null))),
 
-        // A comment cannot sit between arguments here, so the note on where the
-        // server list lives belongs above this expression rather than inside it.
-        // ⚠ THE MCP SERVER LIST IS NOT EDITED HERE. The edge01 Settings section
-        // is where a server list is written, because that is where a device
-        // record exists to hold it; a second editor would be a second writer of
-        // one config. This section is pairing and status only.
-        state.servers?.length ? h('div', { className: 'group' },
-          h('h3', null, t('Bridged servers')),
-          h('p', { className: 'muted' }, state.servers.map((entry) => entry.name).join(', '))) : null);
+        // ⚠ ONE EDITOR, AND IT IS NOT THIS PANEL. A server list written here
+        // would be a second writer of one config, and a paired machine's token
+        // cannot reach the gateway's Settings route anyway. The list is edited
+        // on the bridge's pairing page; this panel opens it.
+        state.paired ? h('div', { className: 'group' },
+          h('h3', null, t('MCP servers')),
+          h('p', { className: 'muted' }, state.servers?.length
+            ? state.servers.map((entry) => entry.name).join(', ')
+            : t('No servers configured yet.')),
+          state.editorUrl ? h('div', { className: 'actions' },
+            h('a', { className: 'link', href: state.editorUrl, target: '_blank', rel: 'noreferrer noopener' },
+              t('Edit servers on DragonByte'))) : null) : null);
     }
 
     return {

@@ -247,9 +247,12 @@ function apply(ctx, config = {}) {
    * gateway would accept, so Settings opens the page rather than duplicating it.
    * The link is minted per request because its code is short-lived.
    */
-  async function editorUrl() {
+  // ⚠ EVERY ANSWER THAT REPLACES THE PANEL'S STATE INCLUDES IT. The section sets
+  // its whole state from whichever route answered, so a `publicStatus()` without
+  // this would drop a link that was there a moment ago.
+  async function answer() {
     const code = await editorCodeOf({ bridgeUrl, token: state.credential?.token });
-    return pairPageUrl({ bridgeUrl, code });
+    return { ...publicStatus(), editorUrl: pairPageUrl({ bridgeUrl, code }) };
   }
 
   const routes = [
@@ -258,20 +261,21 @@ function apply(ctx, config = {}) {
       handler: async (req, res) => {
         const url = new URL(req.url || '/', 'http://host.invalid');
         try {
-          if (url.pathname === '/dragonbyte/status' && req.method === 'GET') return json(res, 200, { ...publicStatus(), editorUrl: await editorUrl() });
+          if (url.pathname === '/dragonbyte/status' && req.method === 'GET') return json(res, 200, await answer());
           if (url.pathname === '/dragonbyte/pair' && req.method === 'POST') {
             const body = await readBody(req);
-            return json(res, 200, await pair({ tenantId: typeof body?.tenantId === 'string' ? body.tenantId : '' }));
+            await pair({ tenantId: typeof body?.tenantId === 'string' ? body.tenantId : '' });
+            return json(res, 200, await answer());
           }
           if (url.pathname === '/dragonbyte/credential' && req.method === 'DELETE') {
             state.credential = { token: '', refreshToken: '', expiresAt: 0, tenantId: '', mcpServers: state.credential?.mcpServers ?? [] };
             await saveCredential(state.credential);
             await stop();
-            return json(res, 200, publicStatus());
+            return json(res, 200, await answer());
           }
           if (url.pathname === '/dragonbyte/reconnect' && req.method === 'POST') {
             await start();
-            return json(res, 200, publicStatus());
+            return json(res, 200, await answer());
           }
           return json(res, 404, { error: 'not found' });
         } catch (error) {

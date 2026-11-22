@@ -19,9 +19,17 @@ Settings -> Local MCP -> Pair this machine
 ```
 
 Pairing opens your browser on `edge01.snapai.app`, where you sign in with the
-Google account that owns the tenant. Approve it and the machine comes back
-paired; enter your MCP servers and they are bridged. There is nothing to copy and
-no token to paste.
+Google account that owns the DSH tenants. Approve it and the machine comes back
+paired. There is nothing to copy and no token to paste.
+
+**A paired machine serves every tenant that account owns.** There is no tenant
+picker: which tenants an address owns is a registry question the bridge answers
+on every publish, so handing the choice to a person would only be a way to
+answer it wrongly.
+
+**This section does not edit the MCP server list.** `Settings -> Local MCP` on
+edge01 is the one editor, because a device record there is what holds the list.
+Editing it in both places would give one config two writers.
 
 ⚠ **The browser step is not optional, and it cannot happen inside the app.** A
 desktop shell serves its UI from an `app://` origin, which Firebase will never
@@ -76,7 +84,7 @@ Limits worth knowing before you plan around them:
 | What | Where |
 | --- | --- |
 | the device token and tenant binding | `~/.config/dsh-dragonbyte/credential.json` (0600) |
-| the MCP server list | the same file |
+| the MCP server list | `Settings -> Local MCP` on edge01, read here at start |
 | revocation | the DSH host, from `Settings -> Local MCP -> Disconnect` |
 
 Override the config location with `DSH_DRAGONBYTE_CONFIG_DIR`.

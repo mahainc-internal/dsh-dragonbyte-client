@@ -5,7 +5,7 @@ window.__ModuleLoader__.load({
     const h = React.createElement;
     const namespace = 'dsh-dragonbyte';
     const zh = {
-      'Local MCP': '本地 MCP',
+      'DragonByte': 'DragonByte',
       'Serve the MCP servers on your own machine to your DSH tenant.': '将你机器上的 MCP 服务器提供给你的 DSH 租户。',
       'Pair this machine': '配对此机器',
       'Pairing…': '正在配对…',
@@ -57,32 +57,6 @@ window.__ModuleLoader__.load({
       return new URL('dragonbyte/', document.baseURI).toString();
     }
 
-    function parseLines(text) {
-      const servers = [];
-      for (const raw of String(text || '').split('\n')) {
-        const line = raw.trim();
-        if (!line || line.startsWith('#')) continue;
-        const at = line.indexOf(':');
-        if (at < 1) throw new Error('each line needs "name: command or URL"');
-        const name = line.slice(0, at).trim();
-        const rest = line.slice(at + 1).trim();
-        if (!/^[a-z][a-z0-9-]{0,31}$/.test(name)) throw new Error(`${name}: name must match [a-z][a-z0-9-]{0,31}`);
-        if (/^https?:\/\//.test(rest)) servers.push({ name, transport: 'http', url: rest });
-        else {
-          const [command, ...args] = rest.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((part) => part.replace(/^["']|["']$/g, '')) ?? [];
-          if (!command) throw new Error(`${name}: needs a command`);
-          servers.push({ name, transport: 'stdio', command, args });
-        }
-      }
-      return servers;
-    }
-
-    function formatLines(servers) {
-      return (servers || []).map((entry) => entry.transport === 'http'
-        ? `${entry.name}: ${entry.url}`
-        : `${entry.name}: ${[entry.command, ...(entry.args || [])].join(' ')}`).join('\n');
-    }
-
     const STATUS_LABEL = {
       connected: 'Connected', connecting: 'Connecting…', idle: 'Not connected',
       'no-servers': 'No servers configured yet.', error: 'Not connected',
@@ -93,7 +67,6 @@ window.__ModuleLoader__.load({
       const [state, setState] = React.useState({ loading: true, status: 'idle', servers: [], paired: false, tenantId: '' });
       const [error, setError] = React.useState('');
       const [busy, setBusy] = React.useState('');
-      const [serversText, setServersText] = React.useState('');
 
       const load = React.useCallback(async (signal) => {
         try {
@@ -101,7 +74,6 @@ window.__ModuleLoader__.load({
           if (!response.ok) throw new Error('Could not reach the local host.');
           const payload = await response.json();
           setState({ loading: false, ...payload });
-          setServersText((current) => current || formatLines(payload.servers));
           setError('');
         } catch (failure) {
           if (!signal?.aborted) { setState((s) => ({ ...s, loading: false })); setError(failure.message || 'Could not reach the local host.'); }
@@ -130,17 +102,6 @@ window.__ModuleLoader__.load({
         finally { setBusy(''); void load(); }
       }
 
-      async function save() {
-        setBusy('save');
-        try {
-          let servers;
-          try { servers = parseLines(serversText); } catch (failure) { setError(failure.message); setBusy(''); return; }
-          await call('mcp', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mcpServers: servers }) });
-          setError('');
-        } catch (failure) { setError(failure.message || 'Could not save. Check the format and retry.'); }
-        finally { setBusy(''); }
-      }
-
       async function disconnect() {
         setBusy('revoke');
         try { await call('credential', { method: 'DELETE' }); setError(''); }
@@ -152,7 +113,7 @@ window.__ModuleLoader__.load({
 
       return h('section', { className: 'dsh-dragonbyte' },
         h('style', null, css),
-        h('h2', null, t('Local MCP')),
+        h('h2', null, t('DragonByte')),
         h('p', null, t('Serve the MCP servers on your own machine to your DSH tenant.')),
         error ? h('p', { className: 'muted', role: 'alert' }, t(error)) : null,
 
@@ -170,22 +131,20 @@ window.__ModuleLoader__.load({
               // start. An already-paired machine keeps its tenant.
               h('button', { type: 'button', disabled: busy !== '', onClick: () => void pair() },
                 busy === 'pair' ? t('Pairing…') : t('Pair this machine')),
+              state.paired ? h('button', { type: 'button', disabled: busy !== '', onClick: () => void call('reconnect', { method: 'POST' }).catch(() => setError('Could not reach the local host.')) },
+                t('Reconnect')) : null,
               state.paired ? h('button', { type: 'button', disabled: busy !== '', onClick: () => void disconnect() },
                 busy === 'revoke' ? t('Revoking…') : t('Disconnect')) : null))),
 
-        h('div', { className: 'group' },
-          h('h3', null, t('MCP servers')),
-          h('p', { className: 'muted' }, t('One per line: name: command, or name: https URL.')),
-          h('textarea', {
-            value: serversText, spellCheck: false,
-            placeholder: 'fs: npx -y @modelcontextprotocol/server-filesystem ~/docs\ndocs: https://mcp.example.com/mcp',
-            onChange: (event) => setServersText(event.target.value),
-          }),
-          h('div', { className: 'actions' },
-            h('button', { type: 'button', disabled: busy !== '', onClick: () => void save() },
-              busy === 'save' ? t('Saving…') : t('Save servers')),
-            h('button', { type: 'button', disabled: busy !== '' || !state.paired, onClick: () => void call('reconnect', { method: 'POST' }).catch(() => setError('Could not reach the local host.')) },
-              t('Reconnect')))));
+        // A comment cannot sit between arguments here, so the note on where the
+        // server list lives belongs above this expression rather than inside it.
+        // ⚠ THE MCP SERVER LIST IS NOT EDITED HERE. The edge01 Settings section
+        // is where a server list is written, because that is where a device
+        // record exists to hold it; a second editor would be a second writer of
+        // one config. This section is pairing and status only.
+        state.servers?.length ? h('div', { className: 'group' },
+          h('h3', null, t('Bridged servers')),
+          h('p', { className: 'muted' }, state.servers.map((entry) => entry.name).join(', '))) : null);
     }
 
     return {
@@ -196,7 +155,7 @@ window.__ModuleLoader__.load({
         function Section() { return h(DragonbyteSection, { t }); }
         ctx.effect(() => ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section', id: 'dragonbyte', order: 23,
-          label: () => t('Local MCP'), locale: namespace,
+          label: () => t('DragonByte'), locale: namespace,
         }, Section)), 'dragonbyte: settings section');
       },
     };

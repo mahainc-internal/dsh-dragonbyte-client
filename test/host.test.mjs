@@ -87,7 +87,7 @@ test('exactly one owned tenant is adopted, and the catalog is republished with i
   session.close();
 });
 
-test('several owned tenants are refused rather than guessed', async () => {
+test('several owned tenants are served together, not refused', async () => {
   const socket = fakeWebSocket();
   const logged = [];
   const session = serveBridge({
@@ -98,10 +98,13 @@ test('several owned tenants are refused rather than guessed', async () => {
   });
   socket.open();
   socket.emit('message', { data: JSON.stringify({ v: 1, type: 'tenants', tenants: ['a'.repeat(32), 'b'.repeat(32)] }) });
-  // Nothing is republished: a guess here would hand one tenant's tools to
-  // another, so the host asks for --tenant instead.
-  assert.equal(socket.sent.filter((m) => m.type === 'catalog').length, 1);
-  assert.match(logged.at(-1), /--tenant/);
+  // ⚠ THE CATALOG IS REPUBLISHED WITHOUT A TENANT, SO THE BRIDGE FANS IT OUT to
+  // every tenant the address owns. Picking one here was the old behaviour and it
+  // left the other tenants unserved; refusing was worse still.
+  const catalogs = socket.sent.filter((m) => m.type === 'catalog');
+  assert.equal(catalogs.length, 2);
+  assert.equal(catalogs.at(-1).tenantId, undefined);
+  assert.match(logged.at(-1), /serving all of them/);
   session.close();
 });
 

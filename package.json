@@ -1,6 +1,6 @@
 {
   "name": "@snapai/dsh-dragonbyte-client",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Share the MCP servers on your own machine with a DSH tenant",
   "exports": {

@@ -213,21 +213,18 @@ export function serveBridge({ url, token, refreshToken = '', expiresAt = 0, tena
         return;
       }
       if (message.type === 'tenants') {
+        // ⚠ THIS FRAME IS LEGACY, AND THE REFUSAL IS GONE WITH IT. An older
+        // bridge answers a tenant-less catalog by listing what the address
+        // owns; that listing used to force a choice and then give up. A current
+        // bridge publishes to every owned tenant on the catalog itself, so all
+        // this has to do is republish and let the bridge decide.
         const owned = Array.isArray(message.tenants) ? message.tenants.filter((id) => typeof id === 'string') : [];
         if (!boundTenant && owned.length === 1) {
           boundTenant = owned[0];
           log(`dragonbyte-host: this address owns one tenant; serving ${boundTenant}`);
-          publishCatalog();
-          return;
         }
-        if (!boundTenant) {
-          // ⚠ REFUSED, NOT GUESSED. A machine serving several tenants is a
-          // choice the owner makes, and a wrong guess hands one tenant's tools
-          // to another with no trace.
-          log(`dragonbyte-host: ${owned.length} tenants own this address; pass --tenant <id> to choose one`);
-          closedByUs = true;
-          socket?.close();
-          return;
+        if (!boundTenant && owned.length > 1) {
+          log(`dragonbyte-host: this address owns ${owned.length} tenants; serving all of them`);
         }
         publishCatalog();
         return;

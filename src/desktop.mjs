@@ -20,7 +20,7 @@ import { createInterface } from 'node:readline/promises';
 import { spawn } from 'node:child_process';
 
 import { connectServers, serveBridge } from './host.mjs';
-import { credentialPath, loadCredential, saveCredential, specsFromConfig } from './host-main.mjs';
+import { credentialPath, loadCredential, saveCredential } from './host-main.mjs';
 
 export const name = 'dragonbyte';
 export const inject = ['webServer'];
@@ -110,10 +110,10 @@ function apply(ctx, config = {}) {
     state.connecting = (async () => {
       await stop();
       if (!state.credential?.token) { state.status = 'idle'; return; }
-      // ⚠ ONE FORM, WRITTEN BY `specsFromConfig` AND READ HERE UNCHANGED. The
-      // credential holds the spec objects `connectServers` takes, so re-parsing
-      // them as a `{command|url}` config would read a stdio spec as a server
-      // that "needs either command or url".
+      // ⚠ ONE FORM, WRITTEN WHERE THE LIST IS EDITED AND READ HERE UNCHANGED.
+      // The credential holds the spec objects `connectServers` takes, so
+      // re-parsing them as a `{command|url}` config would read a stdio spec as
+      // a server that "needs either command or url".
       const specs = Array.isArray(state.credential.mcpServers) ? state.credential.mcpServers : [];
       // ⚠ AN EMPTY CATALOG IS NOT PUBLISHED. Binding a tenant to a host that can
       // do nothing is worse than being offline, so a machine with no servers
@@ -215,14 +215,6 @@ function apply(ctx, config = {}) {
           if (url.pathname === '/dragonbyte/pair' && req.method === 'POST') {
             const body = await readBody(req);
             return json(res, 200, await pair({ tenantId: typeof body?.tenantId === 'string' ? body.tenantId : '' }));
-          }
-          if (url.pathname === '/dragonbyte/mcp' && req.method === 'PUT') {
-            const body = await readBody(req);
-            const servers = specsFromConfig({ mcpServers: body?.mcpServers });
-            state.credential = { ...state.credential, mcpServers: servers };
-            await saveCredential(state.credential);
-            await start();
-            return json(res, 200, publicStatus());
           }
           if (url.pathname === '/dragonbyte/credential' && req.method === 'DELETE') {
             state.credential = { token: '', refreshToken: '', expiresAt: 0, tenantId: '', mcpServers: state.credential?.mcpServers ?? [] };

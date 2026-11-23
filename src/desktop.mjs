@@ -220,6 +220,8 @@ function apply(ctx, config = {}) {
         connect: (url, { headers }) => new WebSocket(url, { headers }),
         onServers: (servers) => { state.credential.mcpServers = servers; },
       });
+      const session = state.session;
+      catalog.onCatalog((next) => session.republish(next));
       state.status = 'connected';
       state.error = '';
     })().catch((error) => {

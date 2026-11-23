@@ -265,7 +265,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, io =
   const specs = mcpServers?.length
     ? specsFromConfig({ mcpServers: Object.fromEntries(mcpServers.map((entry) => [entry.name, entry])) })
     : args.mcp ? serverSpecs(args.mcp) : await promptServers(ask);
-  const { catalog, call, close } = await connectServers(specs, { log: (line) => console.log(line) });
+  const { catalog, call, close, onCatalog } = await connectServers(specs, { log: (line) => console.log(line) });
   if (!catalog.servers.length) {
     await close();
     throw new Error('no configured MCP server connected; nothing to publish');
@@ -288,6 +288,8 @@ export async function main(argv = process.argv.slice(2), env = process.env, io =
     // process was gone before it fired.
     keepAlive: true,
   });
+  // A server that changes its tool list mid-run reaches the tenant through here.
+  onCatalog((next) => session.republish(next));
   // The refreshed token replaces only the credential; the tenant and the refresh
   // token stay as they were, so a renewal never loses the binding.
   session.onRefresh(({ token, expiresAt }) => {

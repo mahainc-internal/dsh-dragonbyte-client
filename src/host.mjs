@@ -18,6 +18,9 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { MAX_FRAME_BYTES, WIRE_VERSION, assertFrame, validateArgs, validateCatalog, validateResult } from './wire.mjs';
 
 const CALL_TIMEOUT_MS = 60_000;
+// How often every server's tool list is read again, as the fallback for a
+// `list_changed` notification that had no stream to arrive on.
+const RELIST_INTERVAL_MS = 30_000;
 const PING_INTERVAL_MS = 30_000;
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
@@ -41,39 +44,230 @@ function createTransport(spec) {
 }
 
 /**
+ * Whether a failed call failed because the *session* is gone rather than because
+ * the tool did something.
+ *
+ * ⚠ THE SERVER LOSES A SESSION WITHOUT TELLING THE CLIENT, AND THE CLIENT KEEPS
+ * USING IT. A stateful Streamable HTTP server evicts an idle session after an
+ * hour, drops every session on restart, and answers a request carrying a dead
+ * id with `404 MCP session not found or expired`. Measured against OpenChatCut
+ * on 2026-11-23: after its host process restarted, every call kept failing with
+ * that 404 and nothing ever recovered, because the client held a session id the
+ * server had forgotten. The SDK does not re-initialize on this, so the retry has
+ * to happen here.
+ *
+ * The status alone is not enough to conclude the *tool* did nothing: a server
+ * may also answer 404 from a tool-aware route. Both conditions are required —
+ * a 4xx on a request that carried a session id, with a body naming a missing
+ * session — and a stdio transport can never match, because it has no sessions.
+ */
+function sessionLost(error) {
+  const status = error?.status ?? error?.code;
+  if (typeof status !== 'number' || status < 400 || status >= 500) return false;
+  const text = String(error?.text ?? error?.message ?? '');
+  return /session (?:not found|expired|terminated)/i.test(text)
+    || /-32001/.test(text);
+}
+
+/**
+ * Tools whose repeat is safe to send after a transport was rebuilt.
+ *
+ * ⚠ THE LIST IS OF READS, NOT OF NAMES THE SERVER CALLS ITSELF. A retry after a
+ * session rebuild is only safe when the first attempt provably did not run: a
+ * 404 on an unknown session is rejected before the tool is dispatched, so no
+ * side effect happened. That reasoning holds for every tool equally — but a tool
+ * that *mutates* would also be retried on a 4xx whose body merely mentions a
+ * session, and one wrong match there duplicates an edit. Reads are the subset
+ * where being wrong costs nothing, so the retry is limited to them.
+ *
+ * Two shapes cover every server seen so far: a verb-first read
+ * (`read_timeline`, `list_projects`, `get_edit_session`) and a
+ * namespace-prefixed status (`openchatcut_status`, `track_export` does not
+ * match and is not a read).
+ */
+const REPLAYABLE = /^(?:read|list|get|show|inspect|search|browse|find|view|describe)_|\w+_status$/i;
+
+/**
  * Connect every configured MCP server and return the catalog plus a dispatcher.
  *
  * A server that fails to connect is reported and skipped rather than failing
  * the whole host: one broken server on the user's machine must not take the
  * others' tools away from their agent.
  */
-export async function connectServers(specs, { log = () => {} } = {}) {
+export async function connectServers(specs, { log = () => {}, relistMs = RELIST_INTERVAL_MS } = {}) {
   const clients = new Map();
   const tools = new Map();
   const published = [];
+  let current = { servers: [] };
+  let announce = () => {};
+
+  /** Make `listed` the server's whole tool set, here and in its published row. */
+  function adopt(server, client, listed) {
+    for (const key of [...tools.keys()]) {
+      if (key.startsWith(`${server}\0`)) tools.delete(key);
+    }
+    const entries = [];
+    for (const tool of listed || []) {
+      entries.push({ name: tool.name, description: tool.description || '', inputSchema: tool.inputSchema ?? { type: 'object' } });
+      tools.set(`${server}\0${tool.name}`, { client, rawName: tool.name });
+    }
+    const row = published.find((entry) => entry.name === server);
+    if (row) row.tools = entries;
+    return entries;
+  }
+
+  /**
+   * Rebuild the catalog from the published rows and hand it to the bridge.
+   *
+   * ⚠ THE CATALOG IS A COPY, SO A ROW EDIT REACHES NO TENANT BY ITSELF.
+   * `validateCatalog` returns new objects; until this runs, the bridge keeps
+   * serving the list it was given at start. A server whose list went empty is
+   * left out rather than published tool-less, which the wire refuses.
+   */
+  function republish() {
+    const servers = published.filter((row) => row.tools.length);
+    if (!servers.length) {
+      log('dragonbyte-host: every server now exposes no tools; keeping the last published catalog');
+      return;
+    }
+    current = validateCatalog({ servers });
+    announce(current);
+  }
+
+  /**
+   * A client that follows the server's own tool list.
+   *
+   * ⚠ A SERVER'S TOOL LIST CAN CHANGE WHILE IT RUNS. OpenChatCut exposes 44
+   * tools while its editor shows the project list and 131 once a project is
+   * open (measured 2026-11-23), and says so with `tools/list_changed`. A host
+   * that listed once at start served whichever half it happened to see until
+   * it was restarted. The SDK re-lists on that notification; a notice from a
+   * client that has since been replaced is dropped, so a closing transport
+   * cannot overwrite its successor's list.
+   */
+  function openClient(spec) {
+    const client = new Client({ name: 'dsh-dragonbyte-host', version: '0.1.0' }, {
+      capabilities: {},
+      listChanged: {
+        tools: {
+          onChanged: (error, listed) => {
+            if (clients.get(spec.name) !== client) return;
+            if (error) {
+              log(`dragonbyte-host: ${spec.name} changed its tools but re-listing failed (${error?.message || error})`);
+              return;
+            }
+            const entries = adopt(spec.name, client, listed);
+            log(`dragonbyte-host: ${spec.name} now exposes ${entries.length} tool(s)`);
+            republish();
+          },
+        },
+      },
+    });
+    return client;
+  }
 
   for (const spec of specs) {
     try {
-      const client = new Client({ name: 'dsh-dragonbyte-host', version: '0.1.0' }, { capabilities: {} });
+      const client = openClient(spec);
       await client.connect(createTransport(spec));
       const listed = await client.listTools(undefined, { cacheMode: 'refresh' });
-      const entries = [];
-      for (const tool of listed.tools || []) {
-        entries.push({ name: tool.name, description: tool.description || '', inputSchema: tool.inputSchema ?? { type: 'object' } });
-        tools.set(`${spec.name}\0${tool.name}`, { client, rawName: tool.name });
-      }
-      if (!entries.length) {
+      if (!listed.tools?.length) {
         await client.close();
         log(`dragonbyte-host: ${spec.name} exposes no tools; not published`);
         continue;
       }
       clients.set(spec.name, client);
-      published.push({ name: spec.name, label: spec.label, tools: entries });
+      published.push({ name: spec.name, label: spec.label, tools: [] });
+      const entries = adopt(spec.name, client, listed.tools);
       log(`dragonbyte-host: ${spec.name} exposes ${entries.length} tool(s)`);
     } catch (error) {
       log(`dragonbyte-host: ${spec.name} did not connect (${error?.message || error})`);
     }
   }
+
+  // The spec each published server was reached with, so a session that died can
+  // be re-opened without asking the caller for its configuration again.
+  const specsByName = new Map(specs.map((spec) => [spec.name, spec]));
+  // One rebuild per server at a time: two calls that lose the session together
+  // must not each open a transport, or the older one is left running against a
+  // session nobody uses and the process leaks a connection per failure.
+  const rebuilding = new Map();
+
+  function forget(server) {
+    clients.delete(server);
+    for (const key of [...tools.keys()]) {
+      if (key.startsWith(`${server}\0`)) tools.delete(key);
+    }
+  }
+
+  async function reconnect(server) {
+    const pending = rebuilding.get(server);
+    if (pending) return pending;
+    const spec = specsByName.get(server);
+    if (!spec) throw new Error(`no configuration is held for ${server}`);
+    const attempt = (async () => {
+      // The old client is closed before the new one is built. A stale
+      // StreamableHTTP transport holds a session id the server already forgot,
+      // and leaving it connected is what a later silent failure would be built
+      // on.
+      const previous = clients.get(server);
+      forget(server);
+      await previous?.close().catch(() => {});
+      const client = openClient(spec);
+      await client.connect(createTransport(spec));
+      const listed = await client.listTools(undefined, { cacheMode: 'refresh' });
+      clients.set(server, client);
+      // The published catalog is what a tenant registers tools from, so a tool
+      // that appeared or disappeared during the outage has to reach it. The
+      // bridge answers a republish by replacing the tenant's tool set.
+      const entries = adopt(server, client, listed.tools);
+      republish();
+      log(`dragonbyte-host: ${server} reconnected after its session was lost`);
+      return entries;
+    })().finally(() => rebuilding.delete(server));
+    rebuilding.set(server, attempt);
+    return attempt;
+  }
+
+  /**
+   * Read one server's tool list again; adopt it if it moved, rebuild if the
+   * session is gone.
+   *
+   * ⚠ THE NOTIFICATION NEEDS A LIVE STREAM, AND A RESTARTED APP TAKES IT AWAY.
+   * Measured 2026-11-23: OpenChatCut announced 44 -> 131 tools on the GET stream
+   * when a project opened, then the app relaunched and every request on the old
+   * session answered 404. Nothing arrives on a stream whose session the server
+   * forgot, so without this a host learned of the restart only when a tenant's
+   * call failed on it — and served a stale list until then. A server that is
+   * down altogether is left alone and logged once; its next answer resumes it.
+   */
+  const failing = new Set();
+  async function relist(server) {
+    const client = clients.get(server);
+    if (!client || rebuilding.has(server)) return;
+    try {
+      const listed = await client.listTools(undefined, { cacheMode: 'refresh' });
+      failing.delete(server);
+      if (clients.get(server) !== client) return;
+      const row = published.find((entry) => entry.name === server);
+      const next = (listed.tools || []).map((tool) => ({ name: tool.name, description: tool.description || '', inputSchema: tool.inputSchema ?? { type: 'object' } }));
+      if (row && JSON.stringify(row.tools) === JSON.stringify(next)) return;
+      const entries = adopt(server, client, listed.tools);
+      log(`dragonbyte-host: ${server} now exposes ${entries.length} tool(s)`);
+      republish();
+    } catch (error) {
+      if (sessionLost(error)) {
+        await reconnect(server).catch((rebuildError) => log(`dragonbyte-host: ${server} lost its session and reconnecting failed (${rebuildError?.message || rebuildError})`));
+        return;
+      }
+      if (!failing.has(server)) log(`dragonbyte-host: ${server} did not answer a tool listing (${error?.message || error})`);
+      failing.add(server);
+    }
+  }
+  const relistTimer = setInterval(() => {
+    for (const server of [...clients.keys()]) void relist(server);
+  }, relistMs);
+  relistTimer.unref?.();
 
   // ⚠ AN EMPTY CATALOG IS VALID HERE AND INVALID ON THE WIRE. The host must be
   // able to start, report "nothing connected", and keep retrying — crashing on
@@ -81,32 +275,90 @@ export async function connectServers(specs, { log = () => {} } = {}) {
   // by hand for no reason. What must not happen is publishing it: the wire
   // validator refuses a tool-less catalog, so the socket stays closed until
   // there is something real to send.
-  const catalog = published.length
-    ? validateCatalog({ servers: published })
-    : { servers: [] };
+  if (published.length) current = validateCatalog({ servers: published });
 
   return {
-    catalog,
+    /** The catalog as of now; `onCatalog` is told of every later one. */
+    get catalog() { return current; },
     clients,
-    /** One `tools/call` on a published pair. Errors come back as `isError` results. */
+    /** Receive each catalog published after start, e.g. a bridge's `republish`. */
+    onCatalog(fn) { announce = typeof fn === 'function' ? fn : () => {}; },
+    /**
+     * One `tools/call` on a published pair. Errors come back as `isError` results.
+     *
+     * A call that finds its session gone rebuilds the transport and, for a read,
+     * sends the call once more. A write is not retried: it answers with the
+     * reason and the fact that it may have run, because the only proof the first
+     * attempt did nothing is the server's own 404 text, and a wrong reading of
+     * that text turns one edit into two.
+     */
     async call(server, tool, args) {
-      const target = tools.get(`${server}\0${tool}`);
-      if (!target) return { content: [{ type: 'text', text: `unknown tool ${server}/${tool}` }], isError: true };
-      try {
+      const send = async () => {
+        const target = tools.get(`${server}\0${tool}`);
+        if (!target) return { missing: true };
         const result = await target.client.callTool(
           { name: target.rawName, arguments: validateArgs(args) },
           { timeout: CALL_TIMEOUT_MS },
         );
-        return validateResult(result);
+        return { result: validateResult(result) };
+      };
+      try {
+        const first = await send();
+        if (first.missing) return { content: [{ type: 'text', text: `unknown tool ${server}/${tool}` }], isError: true };
+        return first.result;
       } catch (error) {
-        // ⚠ A THROWN CALL MAY ALREADY HAVE HAPPENED on the far side. The tool
-        // result says so and the bridge never retries, because a local MCP tool
-        // is an arbitrary side effect rather than a read.
-        return { content: [{ type: 'text', text: `tool ${server}/${tool} failed: ${error?.message || error}` }], isError: true };
+        if (!sessionLost(error)) {
+          // ⚠ A THROWN CALL MAY ALREADY HAVE HAPPENED on the far side. The tool
+          // result says so and the bridge never retries, because a local MCP tool
+          // is an arbitrary side effect rather than a read.
+          return { content: [{ type: 'text', text: `tool ${server}/${tool} failed: ${error?.message || error}` }], isError: true };
+        }
+        try {
+          await reconnect(server);
+        } catch (rebuildError) {
+          return {
+            content: [{ type: 'text', text: `tool ${server}/${tool} failed: its MCP session was lost and reconnecting failed (${rebuildError?.message || rebuildError})` }],
+            isError: true,
+          };
+        }
+        // ⚠ A SESSION THAT WAS NOT FOUND REJECTS THE REQUEST BEFORE THE TOOL
+        // RUNS, so a retry of any tool is safe on this exact error. It is still
+        // limited to reads, because the match above is a regular expression over
+        // a server's own text and a false positive on a write would duplicate it.
+        if (!REPLAYABLE.test(tool)) {
+          return {
+            content: [{ type: 'text', text: `tool ${server}/${tool} was not run: its MCP session had expired and the connection was rebuilt. Send it again now that the session is live.` }],
+            isError: true,
+          };
+        }
+        try {
+          const second = await send();
+          if (second.missing) return { content: [{ type: 'text', text: `unknown tool ${server}/${tool}` }], isError: true };
+          return second.result;
+        } catch (retryError) {
+          return { content: [{ type: 'text', text: `tool ${server}/${tool} failed after reconnecting: ${retryError?.message || retryError}` }], isError: true };
+        }
       }
     },
+    /**
+     * Close every server, ending the MCP session explicitly rather than by
+     * dropping the socket.
+     *
+     * ⚠ A SESSION LEFT OPEN STRANDS WHATEVER IT OWNED. OpenChatCut ties an edit
+     * draft to the MCP session that began it, and only a transport that closes
+     * releases that claim (`DELETE`, or an hour of idle) — measured 2026-11-23:
+     * a draft left behind by a restarted host could not be discarded by any
+     * other transport until the dead one was evicted, and the editor refused
+     * every new draft in the meantime. `terminateSession` is what sends that
+     * DELETE; `close` alone merely closes the SSE stream.
+     */
     async close() {
-      await Promise.allSettled([...clients.values()].map((client) => client.close()));
+      clearInterval(relistTimer);
+      await Promise.allSettled([...clients.values()].map(async (client) => {
+        const transport = client.transport;
+        try { await transport?.terminateSession?.(); } catch { /* already gone */ }
+        await client.close();
+      }));
       clients.clear();
       tools.clear();
     },
@@ -138,6 +390,7 @@ export function serveBridge({ url, token, refreshToken = '', expiresAt = 0, tena
   // nothing; the caller is expected to have found something to send.
   if (!catalog?.servers?.length) throw new Error('refusing to bridge an empty catalog');
   let socket = null;
+  let currentCatalog = catalog;
   let currentToken = token;
   let currentExpiry = expiresAt;
   let boundTenant = tenantId;
@@ -152,7 +405,7 @@ export function serveBridge({ url, token, refreshToken = '', expiresAt = 0, tena
   };
 
   const publishCatalog = () => {
-    send({ v: WIRE_VERSION, type: 'catalog', ...(boundTenant ? { tenantId: boundTenant } : {}), catalog });
+    send({ v: WIRE_VERSION, type: 'catalog', ...(boundTenant ? { tenantId: boundTenant } : {}), catalog: currentCatalog });
   };
 
   /**
@@ -300,6 +553,18 @@ export function serveBridge({ url, token, refreshToken = '', expiresAt = 0, tena
     },
     /** Let the caller persist a rotated credential; called before it is used. */
     onRefresh(fn) { persist = typeof fn === 'function' ? fn : () => {}; },
+    /**
+     * Replace the published catalog and send it now if the socket is open.
+     *
+     * The bridge treats a second `catalog` frame on a live socket as a new
+     * revision and the tenant re-registers on its next poll. A closed socket
+     * needs nothing more: every (re)connect publishes the latest catalog.
+     */
+    republish(next) {
+      if (!next?.servers?.length) return;
+      currentCatalog = next;
+      publishCatalog();
+    },
   };
 }
 

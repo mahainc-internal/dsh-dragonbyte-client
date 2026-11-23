@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { bridgeUrlOf, pairPageUrl, parseServerLines, serverLine } from '../src/desktop.mjs';
+import { bridgeUrlOf, codeOfPage, pairPageUrl, parseServerLines, serverLine } from '../src/desktop.mjs';
 
 test('the pairing page is built on the bridge origin, not the desktop origin', () => {
   // ⚠ A DESKTOP SHELL SERVES ITS UI FROM `app://`, WHICH FIREBASE WILL NEVER
@@ -34,6 +34,26 @@ test('the pairing page link carries the loopback callback and nothing else', () 
   const url = new URL(pairPageUrl({ bridgeUrl: 'wss://edge01.snapai.app/dragonbyte/ws', callback: 'http://127.0.0.1:49152/dragonbyte/pair/callback' }));
   assert.equal(url.searchParams.has('code'), false);
   assert.equal(url.searchParams.get('callback'), 'http://127.0.0.1:49152/dragonbyte/pair/callback');
+});
+
+test('the code is read back from the page that shows it', () => {
+  // ⚠ THIS IS THE REPLACEMENT FOR THE LOOPBACK CALLBACK. The page and this
+  // machine never share an origin, so the code is read from the page the bridge
+  // already serves rather than pushed to a listener here.
+  assert.equal(codeOfPage('<code id="code">abc-123</code>'), 'abc-123');
+  assert.equal(codeOfPage('<code id="code"> abc </code>'), 'abc');
+  assert.equal(codeOfPage('<code id="other">abc</code>'), '');
+  assert.equal(codeOfPage('<p>not yet</p>'), '');
+  assert.equal(codeOfPage(null), '');
+});
+
+test('a pairing link names no callback, so nothing depends on loopback', () => {
+  // ⚠ A LINK THAT CARRIED ONE WOULD REINTRODUCE THE PATH THAT FAILED SILENTLY:
+  // a cross-origin load into 127.0.0.1 that a browser may refuse without
+  // telling anyone, leaving the page saying "paired" and this machine waiting.
+  const url = new URL(pairPageUrl({ bridgeUrl: 'wss://edge01.snapai.app/dragonbyte/ws' }));
+  assert.equal(url.searchParams.has('callback'), false);
+  assert.equal(url.searchParams.has('code'), false);
 });
 
 test('typed lines become specs, and a bad line names the line it is on', () => {

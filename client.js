@@ -12,6 +12,7 @@ window.__ModuleLoader__.load({
       'Paired': '已配对',
       'Not paired yet.': '尚未配对。',
       'Open Google sign-in in your browser, approve this machine, then come back.': '在浏览器中打开 Google 登录，批准此机器后返回。',
+      'Keep this window open. Finish the sign-in in your browser; this finishes on its own.': '请保持此窗口打开。在浏览器中完成登录，此处会自动完成。',
       'MCP servers': 'MCP 服务器',
       'Reconnect': '重新连接',
       'Disconnect': '断开连接',
@@ -147,7 +148,7 @@ window.__ModuleLoader__.load({
             h('div', { className: 'detail' },
               h('p', { className: 'muted' },
                 state.paired ? `${t('Paired')} · ${state.tenantId || '—'} · ${t(statusLabel)}` : t('Not paired yet.')),
-              h('p', { className: 'muted' }, t('Open Google sign-in in your browser, approve this machine, then come back.'))),
+              h('p', { className: 'muted' }, t('Keep this window open. Finish the sign-in in your browser; this finishes on its own.'))),
             h('div', { className: 'actions' },
               // ⚠ ENABLED WITH NO TENANT KNOWN, DELIBERATELY. Which tenant an
               // address owns is answered only after sign-in, on the pairing

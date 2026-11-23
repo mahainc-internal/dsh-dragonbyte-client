@@ -15,6 +15,7 @@
 // must never depend on the network, or an offline laptop loses its own settings
 // UI.
 
+import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import { spawn } from 'node:child_process';
 
@@ -25,9 +26,9 @@ export const name = 'dragonbyte';
 export const inject = ['webServer'];
 
 const DEFAULT_BRIDGE = 'wss://edge01.snapai.app/dragonbyte/ws';
-// Long enough for a person to finish a Google sign-in on a phone, short enough
-// that a forgotten browser tab stops being a listener.
-const PAIR_WINDOW_MS = 10 * 60 * 1000;
+// The bridge holds the waiting request this long. Matched on the bridge's own
+// window, with a margin so this side is not what gives up first.
+const WAIT_TTL_MS = 5 * 60 * 1000;
 
 const json = (res, status, payload) => {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
@@ -75,20 +76,7 @@ async function editorCodeOf({ bridgeUrl, token, mcpServers }) {
   return typeof body?.code === 'string' ? body.code : '';
 }
 
-/**
- * Read the code the pairing page is showing.
- *
- * ⚠ THE PAGE IS THE SOURCE, NOT A SECOND CHANNEL. It is the one place the code
- * exists, so reading it back needs no path from the bridge's origin into this
- * machine — which is what made the old loopback callback fail silently.
- * @returns {string} the code, or `''` while the page has not produced one yet.
- */
-export function codeOfPage(html) {
-  const match = /<code id="code">([^<]+)<\/code>/.exec(String(html ?? ''));
-  return match ? match[1].trim() : '';
-}
-
-export function pairPageUrl({ bridgeUrl, code = '', tenantId = '', callback = '' }) {
+export function pairPageUrl({ bridgeUrl, code = '', handle = '', tenantId = '', callback = '' }) {
   const url = new URL('/dragonbyte/pair/start', bridgeUrl.replace(/^ws/, 'http'));
   // ⚠ ONLY THE PARAMETERS THAT EXIST. An empty `tenant` would be sent as a
   // tenant named "", which reads as a choice nobody made.
@@ -97,6 +85,9 @@ export function pairPageUrl({ bridgeUrl, code = '', tenantId = '', callback = ''
   // signs in to spend; the page shows it back so a different machine can be
   // paired from the same browser session.
   if (code) url.searchParams.set('code', code);
+  // ⚠ THE HANDLE IS HOW THE PAGE FINDS THE MACHINE WAITING FOR IT. Without it
+  // the sign-in completes in the browser and nothing on this side hears about it.
+  if (handle) url.searchParams.set('handle', handle);
   if (callback) url.searchParams.set('callback', callback);
   return url.toString();
 }
@@ -227,62 +218,38 @@ function apply(ctx, config = {}) {
   }
 
   /**
-   * Open the pairing page and wait for it to produce a code.
+   * Open the pairing page and wait for the bridge to hand this machine a code.
    *
-   * ⚠ NOTHING HERE IS TOLD THE CODE AHEAD OF TIME, AND THAT IS THE POINT. A
-   * code the bridge mints before any sign-in would be an unauthenticated handle
-   * on a device; this one only exists after Google says who is asking. The page
-   * shows it so this machine can read it back over its own origin, which needs
-   * no path from the bridge into loopback.
+   * ⚠ THE CODE COMES FROM THE BRIDGE, NOT FROM THE PAGE. It is minted in the
+   * browser's own copy of the page, so fetching that page from here returns
+   * markup with no code in it and can only ever time out. The sign-in ends on
+   * the bridge, and the bridge answers this request with the code directly.
    */
   async function pair({ tenantId }) {
     // ⚠ AN EMPTY TENANT IS THE NORMAL FIRST PAIRING, AND THE PAGE NAMES NONE.
     // The device is scoped to the account, so there is nothing to choose; the
     // bridge checks ownership from the registry on every catalog it publishes.
-    const pageUrl = pairPageUrl({ bridgeUrl, tenantId });
-    const shownBefore = await codeShownAt(pageUrl);
-    openBrowser(pageUrl);
-    const code = await awaitPasted(shownBefore);
-    return redeem(code);
-  }
-
-  /** The code the page is showing right now, or `''` when it shows none. */
-  async function codeShownAt(page) {
-    try {
-      const response = await fetch(page, { cache: 'no-store', signal: AbortSignal.timeout(10_000) });
-      return response.ok ? codeOfPage(await response.text()) : '';
-    } catch { return ''; }
+    const handle = randomBytes(16).toString('base64url');
+    const issued = waitForPairing(handle);
+    openBrowser(pairPageUrl({ bridgeUrl, handle, tenantId }));
+    return redeem((await issued).code);
   }
 
   /**
-   * Watch the pairing page until it shows a code.
+   * Hold this request until the browser finishes signing in, then take the code.
    *
-   * ⚠ THE PAGE IS POLLED, NOT ASKED TO PUSH. It could not post here: its
-   * origin is the bridge's, this server's is the app's, and the listener that
-   * briefly existed to bridge that gap is the thing that failed silently. A GET
-   * of a page that is already public adds no reach the browser did not have.
+   * ⚠ THE HANDLE IS THIS MACHINE'S CLAIM ON THE RESULT, AND IT IS THE ONLY
+   * ONE. It is 16 random bytes, never shown to anyone, and the bridge keeps it
+   * until it either hands over a code or the window closes.
    */
-  function awaitPasted(shownBefore) {
-    return new Promise((resolve, reject) => {
-      const deadline = Date.now() + PAIR_WINDOW_MS;
-      const pageUrl = pairPageUrl({ bridgeUrl });
-      const tick = async () => {
-        try {
-          const response = await fetch(pageUrl, { cache: 'no-store', signal: AbortSignal.timeout(10_000) });
-          if (response.ok) {
-            const code = codeOfPage(await response.text());
-            // ⚠ A CODE SHOWN BEFORE THIS CLICK IS NOT ONE THIS CLICK PRODUCED.
-            // A page left open from an earlier attempt keeps its last code on
-            // screen, and that one is either spent or about to be refused.
-            if (code && code !== shownBefore) return resolve(code);
-          }
-        } catch { /* offline or slow: the window below is what bounds this */ }
-        if (Date.now() >= deadline) return reject(new Error('the pairing page never produced a code'));
-        const timer = setTimeout(tick, 2000);
-        timer.unref?.();
-      };
-      void tick();
-    });
+  async function waitForPairing(handle) {
+    const response = await fetch(`${bridgeUrl.replace(/^ws/, 'http')}/dragonbyte/pair/wait?handle=${encodeURIComponent(handle)}`,
+      { cache: 'no-store', signal: AbortSignal.timeout(WAIT_TTL_MS + 30_000) }).catch(() => null);
+    if (!response) throw new Error('the bridge could not be reached while pairing');
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(body?.error || 'the bridge refused to register this machine');
+    if (typeof body?.code !== 'string' || !body.code) throw new Error('sign-in did not finish on the bridge');
+    return body;
   }
 
   /**

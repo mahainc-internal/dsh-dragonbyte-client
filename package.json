@@ -1,6 +1,6 @@
 {
   "name": "dsh-dragonbyte-client",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "type": "module",
   "description": "Share the MCP servers on your own machine with a DSH tenant",
   "exports": {
@@ -9,7 +9,7 @@
     "./client": "./client.js"
   },
   "bin": {
-    "dsh-dragonbyte-host": "./src/host-main.mjs"
+    "dsh-dragonbyte-host": "src/host-main.mjs"
   },
   "files": [
     "src",

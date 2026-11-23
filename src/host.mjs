@@ -127,7 +127,13 @@ export async function connectServers(specs, { log = () => {} } = {}) {
  * `connect` is injected so a test can drive the protocol without a socket.
  */
 export function serveBridge({ url, token, refreshToken = '', expiresAt = 0, tenantId = '', catalog, call, connect, log = () => {},
-  onServers = () => {} }) {
+  onServers = () => {}, keepAlive = false }) {
+  // ⚠ A HEADLESS RUN OWNS ITS OWN LIFETIME; A PLUGIN DOES NOT. In a DSH Host
+  // the app's event loop is what keeps the bridge running, and an unref'd timer
+  // is the polite thing to leave behind. A CLI process has nothing else, so the
+  // same unref'd timer is what made it exit 0 — silently — the moment the bridge
+  // closed the socket, which reads exactly like a run that finished its work.
+  const hold = (timer) => { if (!keepAlive) timer.unref?.(); return timer; };
   // Publishing a tool-less catalog would bind a tenant to a host that can do
   // nothing; the caller is expected to have found something to send.
   if (!catalog?.servers?.length) throw new Error('refusing to bridge an empty catalog');
@@ -170,17 +176,17 @@ export function serveBridge({ url, token, refreshToken = '', expiresAt = 0, tena
     const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_MIN_MS * 2 ** attempt);
     attempt += 1;
     log(`dragonbyte-host: reconnecting in ${delay}ms`);
-    const timer = setTimeout(() => { reconnecting = null; open(); }, delay);
-    timer.unref?.();
+    const timer = hold(setTimeout(() => { reconnecting = null; open(); }, delay));
     reconnecting = timer;
   };
 
   function open() {
     if (closedByUs) return;
-    socket = connect(url, {
+    const live = connect(url, {
       headers: { authorization: `Bearer ${currentToken}` },
     });
-    socket.addEventListener('open', () => {
+    socket = live;
+    live.addEventListener('open', () => {
       attempt = 0;
       publishCatalog();
       refresh();
@@ -188,7 +194,7 @@ export function serveBridge({ url, token, refreshToken = '', expiresAt = 0, tena
       // because a laptop holds a device token, not the browser's session cookie.
       send({ v: WIRE_VERSION, type: 'config' });
     });
-    socket.addEventListener('message', async (event) => {
+    live.addEventListener('message', async (event) => {
       let message;
       try { message = JSON.parse(String(event.data)); } catch { return; }
       // ⚠ THE BRIDGE'S FRAMES ARE VALIDATED, NOT ASSUMED. A newer bridge may
@@ -246,8 +252,31 @@ export function serveBridge({ url, token, refreshToken = '', expiresAt = 0, tena
       const result = await call(message.server, message.tool, message.args ?? {});
       send({ v: WIRE_VERSION, type: 'reply', id: message.id, result });
     });
-    socket.addEventListener('close', () => { socket = null; scheduleReconnect(); });
-    socket.addEventListener('error', () => { /* `close` always follows */ });
+    live.addEventListener('close', () => {
+      if (socket !== live) return;
+      socket = null;
+      scheduleReconnect();
+    });
+    // ⚠ A REFUSED HANDSHAKE IS AN `error` WITH NO `close`, AND THAT IS THE
+    // ORDINARY REFUSAL PATH. Measured on Node 22 against a live bridge: a
+    // non-101 answer emits `error` and then nothing — `readyState` stays 0 and
+    // `close` never fires. Waiting for that `close` meant a wrong or expired
+    // token produced no refusal log, no retry, and a process that exited 0 the
+    // moment the event loop drained: the run looked like it had simply finished.
+    live.addEventListener('error', () => {
+      // ⚠ ONLY WHEN THIS SOCKET IS STILL THE CURRENT ONE AND NEVER CONNECTED.
+      // A socket that did open is followed by its own `close`, and tearing it
+      // down here would cut a live call short for an error that was not fatal.
+      if (socket !== live || live.readyState !== 0) return;
+      // ⚠ NOTHING IS CLOSED HERE, AND THAT IS DELIBERATE. Calling `close()` on
+      // a socket that never opened emits `error` again — synchronously, on this
+      // same listener — and the handler re-entered itself until the stack ran
+      // out (measured: 62KB of the same line inside 14ms). The socket is
+      // already dead; dropping the reference is the whole cleanup.
+      log('dragonbyte-host: the bridge refused the connection; check the device token');
+      socket = null;
+      scheduleReconnect();
+    });
   }
 
   open();
@@ -259,7 +288,7 @@ export function serveBridge({ url, token, refreshToken = '', expiresAt = 0, tena
     if (socket?.readyState === 1) socket.send(JSON.stringify({ v: WIRE_VERSION, type: 'ping' }));
     refresh();
   }, PING_INTERVAL_MS);
-  ping.unref?.();
+  hold(ping);
 
   return {
     close() {

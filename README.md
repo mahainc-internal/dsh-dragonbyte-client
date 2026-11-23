@@ -58,10 +58,16 @@ the one-time code that comes back.
 ## On a plain machine
 
 ```sh
-# in a DSH tenant: Settings -> DragonByte -> Create token, then:
 npx -y dsh-dragonbyte-client
-#    paste the token; answer once for each MCP server
+#    opens a browser; sign in with the Google account that owns the tenants
+#    then answer once for each MCP server (or pass --mcp ./mcp.json)
 ```
+
+**The first run pairs through a browser, exactly as DSH Desktop does.** The
+machine registers a handle on the bridge, opens `edge01.snapai.app`, and waits.
+Signing in there hands the code back to the waiting machine over the bridge, so
+nothing has to be copied. A machine with no browser still works: the URL is
+printed, and opening it anywhere finishes the pairing.
 
 The credential is saved in `~/.config/dsh-dragonbyte/credential.json` and the
 host renews its own token before it expires.
@@ -110,7 +116,7 @@ Override the config location with `DSH_DRAGONBYTE_CONFIG_DIR`.
 ## Run it headless
 
 ```sh
-# first run: reads the token from the prompt (or DSH_DRAGONBYTE_TOKEN)
+# first run: pairs through a browser (or takes DSH_DRAGONBYTE_TOKEN)
 dsh-dragonbyte-host
 
 # later runs: everything comes from the credential file
@@ -122,7 +128,7 @@ dsh-dragonbyte-host --bridge wss://edge01.snapai.app/dragonbyte/ws
 | `--bridge <url>` | bridge WebSocket; defaults to `DSH_DRAGONBYTE_BRIDGE` or the edge01 URL |
 | `--mcp <mcp.json>` | a standard `{ "mcpServers": { … } }` file instead of the saved list |
 | `--tenant <id>` | required only when this address owns more than one tenant |
-| `DSH_DRAGONBYTE_TOKEN` | the device token, for a first run without a prompt |
+| `DSH_DRAGONBYTE_TOKEN` | skips the browser and uses a device token you already hold |
 | `DSH_DRAGONBYTE_CONFIG_DIR` | where `credential.json` lives |
 
 `--help` exits without prompting, and a run with a saved credential never asks

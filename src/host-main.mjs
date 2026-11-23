@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // `dsh-dragonbyte-host` — run on the machine that holds the MCP servers.
 //
-//   DSH_DRAGONBYTE_TOKEN=... dsh-dragonbyte-host --email you@example.com
+//   dsh-dragonbyte-host
 //
-// With no `--mcp`, the servers are typed in one at a time. To reuse the config
-// every MCP client already has, pass that file instead:
+// The first run opens a browser to pair this machine with the DSH account; the
+// credential it comes back with is saved and renewed, so later runs pair
+// nothing. To reuse the config every MCP client already has, pass that file:
 //
-//   dsh-dragonbyte-host --email you@example.com --mcp ./mcp.json
+//   dsh-dragonbyte-host --mcp ./mcp.json
 //
 //   { "mcpServers": {
 //       "fs":   { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/me"] },
@@ -21,6 +22,7 @@ import process from 'node:process';
 import { createInterface } from 'node:readline/promises';
 
 import { connectServers, fetchServers, serveBridge } from './host.mjs';
+import { pairWithBrowser } from './pair.mjs';
 
 /**
  * Where the credential lives, and why it is a file rather than a flag.
@@ -182,18 +184,23 @@ export async function main(argv = process.argv.slice(2), env = process.env, io =
   const args = parseArgs(argv);
   if (args.help) {
     console.log('usage: dsh-dragonbyte-host [--bridge <wss url>] [--mcp <mcp.json>]');
-    console.log('Nothing else is needed after the first run: the credential Settings gave you is');
-    console.log('saved in ~/.config/dsh-dragonbyte and renewed by itself.');
+    console.log('The first run opens a browser to pair this machine; nothing has to be copied.');
+    console.log('The credential is saved in ~/.config/dsh-dragonbyte and renewed by itself.');
     return 0;
   }
   const bridge = args.bridge || env.DSH_DRAGONBYTE_BRIDGE || 'wss://edge01.snapai.app/dragonbyte/ws';
   if (!/^wss?:\/\//.test(bridge)) throw new Error('--bridge must be a ws:// or wss:// URL');
 
-  // ⚠ CREATED HERE, NOT AT THE TOP OF `main`. An open readline holds the event
-  // loop, so a run that never prompts — `--help` above all — prints its line and
-  // then never exits. Measured: `--help` with a silent pipe on stdin hung until
-  // the interface moved below the early returns.
-  const ask = io.ask ?? readlineAsk();
+  // ⚠ CREATED ON FIRST USE, NOT HERE. An open readline holds the event loop, so
+  // a run that never prompts — `--help` above all, but now also a first run that
+  // pairs in a browser and then fails to connect — would print its line and then
+  // never exit. Measured: `--help` with a silent pipe on stdin hung until the
+  // interface moved behind a lazy accessor.
+  let pendingAsk = null;
+  const ask = (question) => {
+    pendingAsk ??= io.ask ?? readlineAsk();
+    return pendingAsk(question);
+  };
 
   // ⚠ THE SAVED CREDENTIAL IS THE DEFAULT, AND THE INTERACTIVE PATH EXISTS ONLY
   // FOR THE FIRST RUN. A machine that has connected once should never prompt
@@ -204,10 +211,26 @@ export async function main(argv = process.argv.slice(2), env = process.env, io =
   let credential = saved;
   let mcpServers = args.mcp ? null : (saved?.mcpServers ?? null);
   if (!credential?.token) {
-    const pasted = env.DSH_DRAGONBYTE_TOKEN || await ask('device token from Settings → Dragonbyte: ');
-    if (!pasted) throw new Error('a device token is required');
-    credential = { token: pasted.trim(), refreshToken: '', expiresAt: 0, tenantId: args.tenant || env.DSH_DRAGONBYTE_TENANT || '' };
-    mcpServers = null;
+    // ⚠ THE FIRST RUN PAIRS THROUGH A BROWSER, NOT THROUGH A PASTE. A device
+    // token used to have to be minted in the tenant's Settings and carried over
+    // by hand; the bridge already serves a page that does the same proof, and
+    // DSH Desktop has used it since it shipped. Asking for a paste here made the
+    // terminal the only place a person could not pair the same way.
+    const pasted = env.DSH_DRAGONBYTE_TOKEN || '';
+    if (pasted) {
+      credential = { token: pasted.trim(), refreshToken: '', expiresAt: 0, tenantId: args.tenant || env.DSH_DRAGONBYTE_TENANT || '' };
+      mcpServers = null;
+    } else {
+      const issued = await pairWithBrowser({
+        bridgeUrl: bridge, tenantId: args.tenant || env.DSH_DRAGONBYTE_TENANT || '', env, log: (line) => console.log(line),
+      });
+      credential = { ...issued, mcpServers: [] };
+      // ⚠ SAVED BEFORE THE FIRST CONNECT, NOT AFTER IT. A machine that paired
+      // and then failed to reach the bridge would otherwise pair again on its
+      // next run, minting a second device record for the same laptop.
+      await saveCredential(credential, env, io);
+      mcpServers = null;
+    }
   }
 
   // ⚠ THE NODE CHECK COMES BEFORE THE SOCKET, because `WebSocket` only exists
@@ -248,6 +271,12 @@ export async function main(argv = process.argv.slice(2), env = process.env, io =
     call,
     connect,
     log: (line) => console.log(line),
+    // ⚠ THIS PROCESS HAS NOTHING ELSE HOLDING IT OPEN. Every timer the bridge
+    // owns is unref'd for a Host's sake; a CLI has no Host, so a reconnect
+    // window would let the whole process fall out of the event loop and exit 0
+    // without a word. Measured: a refused handshake logged the retry and the
+    // process was gone before it fired.
+    keepAlive: true,
   });
   // The refreshed token replaces only the credential; the tenant and the refresh
   // token stay as they were, so a renewal never loses the binding.

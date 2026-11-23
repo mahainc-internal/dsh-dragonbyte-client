@@ -15,21 +15,19 @@
 // must never depend on the network, or an offline laptop loses its own settings
 // UI.
 
-import { randomBytes } from 'node:crypto';
-import { createInterface } from 'node:readline/promises';
-import { spawn } from 'node:child_process';
-import { hostname } from 'node:os';
-
 import { connectServers, serveBridge } from './host.mjs';
 import { credentialPath, loadCredential, saveCredential, parseServerLine } from './host-main.mjs';
+import { editorCodeOf, httpBaseOf, labelOf, pairPageUrl, pairWithBrowser } from './pair.mjs';
 
 export const name = 'dragonbyte';
 export const inject = ['webServer'];
 
 const DEFAULT_BRIDGE = 'wss://edge01.snapai.app/dragonbyte/ws';
-// The bridge holds the waiting request this long. Matched on the bridge's own
-// window, with a margin so this side is not what gives up first.
-const WAIT_TTL_MS = 5 * 60 * 1000;
+
+// ⚠ RE-EXPORTED, NOT REIMPLEMENTED. The pairing flow moved into `pair.mjs` so
+// the headless host runs the same one; these two names are what callers and
+// tests already reach for on this module.
+export { labelOf, pairPageUrl };
 
 const json = (res, status, payload) => {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
@@ -53,73 +51,6 @@ const readBody = (req, limit = 256 * 1024) => new Promise((resolve, reject) => {
 
 export function bridgeUrlOf(env = process.env) {
   return env.DSH_DRAGONBYTE_BRIDGE || DEFAULT_BRIDGE;
-}
-
-/**
- * The plain HTTP origin the bridge's REST routes live on.
- *
- * ⚠ THE SOCKET URL'S PATH IS NOT A BASE. `DEFAULT_BRIDGE` ends in `/dragonbyte/ws`,
- * which is where the WebSocket route is mounted, so appending `/dragonbyte/pair/…`
- * to it produced `/dragonbyte/ws/dragonbyte/pair/…` — answered 401 by the gateway,
- * which reads exactly like the machine never signed in.
- */
-function httpBaseOf(bridgeUrl) {
-  const url = new URL(bridgeUrl);
-  url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
-  return url.origin;
-}
-
-/**
- * What this machine calls itself in the tenant's Settings.
- *
- * ⚠ THE OS HOSTNAME, NOT A PROMPT. Pairing is a browser round trip and asking a
- * person to type a name there would add a step to the flow that most needs to
- * be one click. `DSH_DRAGONBYTE_LABEL` overrides it for a person who runs two
- * machines whose hostnames look alike.
- */
-export function labelOf(env = process.env) {
-  const configured = String(env.DSH_DRAGONBYTE_LABEL ?? '').trim();
-  if (configured) return configured.slice(0, 80);
-  try { return String(hostname() || '').slice(0, 80); }
-  catch { return ''; }
-}
-
-/**
- * Ask the bridge for a short-lived editor code, or `''` when it cannot answer.
- *
- * ⚠ THE CODE IS NOT KEPT, BECAUSE IT CANNOT BE. The bridge holds it in memory
- * for an hour; a copy saved beside the credential would be dead by the time a
- * person used it. The device token is signed and can always ask again.
- */
-async function editorCodeOf({ bridgeUrl, token, mcpServers }) {
-  if (!token) return '';
-  const response = await fetch(`${httpBaseOf(bridgeUrl)}/dragonbyte/pair/servers`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(mcpServers === undefined ? { token } : { token, mcpServers }),
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    throw badRequest(body?.error || 'the bridge refused that server list');
-  }
-  const body = await response.json();
-  return typeof body?.code === 'string' ? body.code : '';
-}
-
-export function pairPageUrl({ bridgeUrl, code = '', handle = '', tenantId = '', callback = '' }) {
-  const url = new URL('/dragonbyte/pair/start', httpBaseOf(bridgeUrl));
-  // ⚠ ONLY THE PARAMETERS THAT EXIST. An empty `tenant` would be sent as a
-  // tenant named "", which reads as a choice nobody made.
-  if (tenantId) url.searchParams.set('tenant', tenantId);
-  // ⚠ THE CODE IS THE PAGE'S SUBJECT, NOT A RESUME TOKEN. It is what the person
-  // signs in to spend; the page shows it back so a different machine can be
-  // paired from the same browser session.
-  if (code) url.searchParams.set('code', code);
-  // ⚠ THE HANDLE IS HOW THE PAGE FINDS THE MACHINE WAITING FOR IT. Without it
-  // the sign-in completes in the browser and nothing on this side hears about it.
-  if (handle) url.searchParams.set('handle', handle);
-  if (callback) url.searchParams.set('callback', callback);
-  return url.toString();
 }
 
 const badRequest = (message) => Object.assign(new Error(message), { status: 400 });
@@ -153,17 +84,6 @@ export function serverLine(spec) {
   if (!spec || typeof spec !== 'object') return '';
   if (spec.transport === 'http') return `${spec.name}: ${spec.url}`;
   return `${spec.name}: ${[spec.command, ...(spec.args ?? [])].join(' ')}`;
-}
-
-function openBrowser(url) {
-  const [command, args] = process.platform === 'darwin' ? ['open', [url]]
-    : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]
-      : ['xdg-open', [url]];
-  try {
-    const child = spawn(command, args, { detached: true, stdio: 'ignore' });
-    child.on('error', () => {});
-    child.unref();
-  } catch { /* the URL is printed in the status; the person can open it */ }
 }
 
 function apply(ctx, config = {}) {
@@ -255,38 +175,25 @@ function apply(ctx, config = {}) {
   }
 
   /**
-   * Open the pairing page and wait for the bridge to hand this machine a code.
+   * Open the pairing page and trade the finished sign-in for a credential.
    *
-   * ⚠ THE CODE COMES FROM THE BRIDGE, NOT FROM THE PAGE. It is minted in the
-   * browser's own copy of the page, so fetching that page from here returns
-   * markup with no code in it and can only ever time out. The sign-in ends on
-   * the bridge, and the bridge answers this request with the code directly.
+   * ⚠ THE FLOW LIVES IN `pair.mjs` AND THIS ONLY STORES WHAT IT RETURNS. The
+   * headless host runs the same two routes, so a copy here would be a second
+   * reading of the bridge's contract — and the one that drifted would report a
+   * pairing the other could not make.
    */
   async function pair({ tenantId }) {
-    // ⚠ AN EMPTY TENANT IS THE NORMAL FIRST PAIRING, AND THE PAGE NAMES NONE.
-    // The device is scoped to the account, so there is nothing to choose; the
-    // bridge checks ownership from the registry on every catalog it publishes.
-    const handle = randomBytes(16).toString('base64url');
-    const issued = waitForPairing(handle);
-    openBrowser(pairPageUrl({ bridgeUrl, handle, tenantId }));
-    return redeem((await issued).code);
-  }
-
-  /**
-   * Hold this request until the browser finishes signing in, then take the code.
-   *
-   * ⚠ THE HANDLE IS THIS MACHINE'S CLAIM ON THE RESULT, AND IT IS THE ONLY
-   * ONE. It is 16 random bytes, never shown to anyone, and the bridge keeps it
-   * until it either hands over a code or the window closes.
-   */
-  async function waitForPairing(handle) {
-    const response = await fetch(`${httpBaseOf(bridgeUrl)}/dragonbyte/pair/wait?handle=${encodeURIComponent(handle)}`,
-      { cache: 'no-store', signal: AbortSignal.timeout(WAIT_TTL_MS + 30_000) }).catch(() => null);
-    if (!response) throw new Error('the bridge could not be reached while pairing');
-    const body = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(body?.error || 'the bridge refused to register this machine');
-    if (typeof body?.code !== 'string' || !body.code) throw new Error('sign-in did not finish on the bridge');
-    return body;
+    const credential = await pairWithBrowser({ bridgeUrl, tenantId });
+    state.credential = {
+      token: credential.token,
+      refreshToken: credential.refreshToken,
+      expiresAt: credential.expiresAt,
+      tenantId: credential.tenantId,
+      mcpServers: state.credential?.mcpServers ?? [],
+    };
+    await saveCredential(state.credential);
+    await start();
+    return { tenantId: state.credential.tenantId };
   }
 
   /**
@@ -311,29 +218,6 @@ function apply(ctx, config = {}) {
     await start();
   }
 
-  async function redeem(code) {
-    const response = await fetch(`${httpBaseOf(bridgeUrl)}/dragonbyte/pair/redeem`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      // ⚠ THE NAME IS SENT HERE, BY THE ONLY CALLER THAT KNOWS IT. The browser
-      // signs in and hands over a code; it never learns what this machine is
-      // called, so naming it there would mean asking a person mid-flow.
-      body: JSON.stringify({ code, label: labelOf() }),
-    });
-    const credential = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(credential?.error || 'the pairing code was refused');
-    state.credential = {
-      token: credential.token,
-      refreshToken: credential.refreshToken,
-      expiresAt: credential.expiresAt,
-      tenantId: credential.tenantId,
-      mcpServers: state.credential?.mcpServers ?? [],
-    };
-    await saveCredential(state.credential);
-    await start();
-    return { tenantId: state.credential.tenantId };
-  }
-
   /**
    * Save the list the panel holds, then reconnect with it.
    *
@@ -347,7 +231,11 @@ function apply(ctx, config = {}) {
    */
   async function saveServers(text) {
     const specs = parseServerLines(text);
-    await editorCodeOf({ bridgeUrl, token: state.credential?.token, mcpServers: specs });
+    // ⚠ A REFUSED LIST IS THE PANEL'S 400, NOT A 500. `editorCodeOf` takes the
+    // constructor so a bridge message stays the status a caller sees; a plain
+    // Error here would report "the bridge refused that server list" as an
+    // internal failure and lose the one sentence that says what to fix.
+    await editorCodeOf({ bridgeUrl, token: state.credential?.token, mcpServers: specs, fail: badRequest });
     state.credential = { ...(state.credential ?? {}), mcpServers: specs };
     await saveCredential(state.credential);
     await start();

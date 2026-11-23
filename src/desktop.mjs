@@ -16,7 +16,7 @@
 // UI.
 
 import { connectServers, serveBridge } from './host.mjs';
-import { credentialPath, loadCredential, saveCredential, parseServerLine } from './host-main.mjs';
+import { credentialPath, loadCredential, saveCredential, specsFromConfig } from './host-main.mjs';
 import { editorCodeOf, httpBaseOf, labelOf, pairPageUrl, pairWithBrowser } from './pair.mjs';
 import { fetchGatewayModels, syncProvider, removeProvider } from './provider.mjs';
 
@@ -65,36 +65,52 @@ export function bridgeUrlOf(env = process.env) {
 }
 
 /**
- * Typed lines -> the spec objects `connectServers` and the bridge both take.
+ * A pasted `.mcp.json` document -> the spec objects the bridge and `connectServers` take.
  *
- * ⚠ ONE LINE, ONE SERVER, AND THE COMMAND IS NOT RUN THROUGH A SHELL. The parse
- * is `parseServerLine`, the same one the headless prompt uses, so a line means
- * the same thing here, there, and on a Windows machine.
+ * ⚠ THE SAME PARSER `--mcp` USES. A machine configured by hand and a machine
+ * configured in this panel must mean the same thing, and a second spelling of
+ * the format is how the two drift. `specsFromConfig` is that one parser.
+ *
+ * ⚠ WHAT THE PERSON PASTES IS WHAT THEIR EDITOR SHOWS: a standard `.mcp.json`,
+ * with `mcpServers` either wrapped in the document or pasted alone.
  */
-export function parseServerLines(text) {
-  const specs = [];
-  const seen = new Set();
-  String(text ?? '').split('\n').forEach((raw, index) => {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) return;
-    const at = line.indexOf(':');
-    if (at < 1) throw badRequest(`line ${index + 1}: write "name: command" or "name: https://url"`);
-    const name = line.slice(0, at).trim();
-    if (seen.has(name)) throw badRequest(`line ${index + 1}: ${name} is listed twice`);
-    seen.add(name);
-    try { specs.push(parseServerLine(name, line.slice(at + 1))); }
-    catch (error) { throw badRequest(`line ${index + 1}: ${error.message}`); }
-  });
-  return specs;
+export function parseServerConfig(text) {
+  const raw = String(text ?? '').trim();
+  if (!raw) return [];
+  let document;
+  try { document = JSON.parse(raw); }
+  catch (error) { throw badRequest(`not valid JSON: ${error.message}`); }
+  // ⚠ THE BARE `mcpServers` OBJECT IS ACCEPTED TOO. Copying the inner object out
+  // of a larger file is an ordinary thing to do, and refusing it would be a
+  // formatting rule nobody can see.
+  const config = document?.mcpServers !== undefined ? document : { mcpServers: document };
+  try { return specsFromConfig(config); }
+  catch (error) { throw badRequest(error.message); }
+}
+
+/** The specs this machine holds -> the document the panel shows and a person edits. */
+export function serverConfigText(specs) {
+  const servers = {};
+  for (const spec of specs ?? []) {
+    if (!spec || typeof spec !== 'object' || !spec.name) continue;
+    if (spec.transport === 'http') {
+      servers[spec.name] = {
+        ...(typeof spec.type === 'string' ? { type: spec.type } : {}),
+        url: spec.url,
+        ...(Object.keys(spec.headers ?? {}).length ? { headers: spec.headers } : {}),
+      };
+    } else {
+      servers[spec.name] = {
+        command: spec.command,
+        ...(spec.args?.length ? { args: spec.args } : {}),
+        ...(Object.keys(spec.env ?? {}).length ? { env: spec.env } : {}),
+      };
+    }
+  }
+  return JSON.stringify({ mcpServers: servers }, null, 2);
 }
 
 /** One spec -> the line this panel shows and a person edits. */
-export function serverLine(spec) {
-  if (!spec || typeof spec !== 'object') return '';
-  if (spec.transport === 'http') return `${spec.name}: ${spec.url}`;
-  return `${spec.name}: ${[spec.command, ...(spec.args ?? [])].join(' ')}`;
-}
-
 function apply(ctx, config = {}) {
   const bridgeUrl = config.bridgeUrl || bridgeUrlOf();
   const state = {
@@ -271,7 +287,7 @@ function apply(ctx, config = {}) {
    * machine stops sharing; `start()` then publishes nothing and says so.
    */
   async function saveServers(text) {
-    const specs = parseServerLines(text);
+    const specs = parseServerConfig(text);
     // ⚠ A REFUSED LIST IS THE PANEL'S 400, NOT A 500. `editorCodeOf` takes the
     // constructor so a bridge message stays the status a caller sees; a plain
     // Error here would report "the bridge refused that server list" as an
@@ -292,9 +308,9 @@ function apply(ctx, config = {}) {
     // exactly as the tenant's device list does. A person running two machines
     // with alike hostnames sets `DSH_DRAGONBYTE_LABEL` to tell them apart.
     label: labelOf(),
-    // The list as text, because this panel is where it is typed. The credential
-    // holds specs; the panel holds one line per server.
-    servers: (state.credential?.mcpServers ?? []).map(serverLine).join('\n'),
+    // The list as the document a person pastes, because this panel is where it
+    // is edited. The credential holds specs; the panel holds `.mcp.json` text.
+    servers: serverConfigText(state.credential?.mcpServers),
     credentialPath: credentialPath(),
     // ⚠ A COUNT, NOT THE MODELS. The panel does not choose or configure the
     // gateway any more; it reports that pairing produced models, and a failure

@@ -104,7 +104,15 @@ function specList(servers, source) {
   return Object.entries(servers).map(([name, spec]) => {
     if (!SERVER_NAME.test(name)) throw new Error(`server name "${name}" must match [a-z][a-z0-9-]{0,31}`);
     if (spec?.command) return { name, label: spec.label, transport: 'stdio', command: spec.command, args: spec.args ?? [], env: spec.env ?? {} };
-    if (spec?.url) return { name, label: spec.label, transport: 'http', url: spec.url, headers: spec.headers ?? {} };
+    // ⚠ `type` IS CARRIED, NOT INTERPRETED. `url` already decides the transport,
+    // so a `type` of `streamable-http` adds nothing to how the server connects —
+    // but a panel that pastes a file and shows it back stripped of a field reads
+    // as a save that lost something. Unknown values are left alone for that same
+    // reason: refusing them would reject files other clients accept.
+    if (spec?.url) return {
+      name, label: spec.label, transport: 'http', url: spec.url, headers: spec.headers ?? {},
+      ...(typeof spec.type === 'string' ? { type: spec.type } : {}),
+    };
     throw new Error(`server "${name}" needs either "command" (stdio) or "url" (HTTP)`);
   });
 }

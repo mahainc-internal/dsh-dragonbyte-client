@@ -22,7 +22,7 @@ window.__ModuleLoader__.load({
       'Connecting…': '正在连接…',
       'Not connected': '未连接',
       'No servers configured yet.': '尚未配置服务器。',
-      'One per line: name: command, or name: https URL.': '每行一个：name: 命令，或 name: https URL。',
+      'Paste a .mcp.json file.': '粘贴 .mcp.json 文件。',
       'These run on this machine.': '这些服务器在此机器上运行。',
       'Save servers': '保存服务器',
       'Saving…': '正在保存…',
@@ -48,6 +48,7 @@ window.__ModuleLoader__.load({
       .dsh-dragonbyte .actions { display: flex; flex-wrap: wrap; gap: 12px; }
       .dsh-dragonbyte textarea { width: 100%; min-height: 96px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.5; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); }
       .dsh-dragonbyte textarea:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
+      .dsh-dragonbyte textarea.json { white-space: pre; overflow-wrap: normal; overflow-x: auto; tab-size: 2; }
       .dsh-dragonbyte .link { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 7px 14px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); font-size: 13px; text-decoration: none; }
       .dsh-dragonbyte .link:hover { background: var(--dsw-alias-interactive-bg-hover); }
       .dsh-dragonbyte button { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 7px 14px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); font: inherit; font-size: 13px; cursor: pointer; }
@@ -177,10 +178,11 @@ window.__ModuleLoader__.load({
         h('div', { className: 'group' },
           h('h3', null, t('MCP servers')),
           state.paired ? null : h('p', { className: 'muted' }, t('No servers configured yet.')),
-          h('p', { className: 'muted' }, t('One per line: name: command, or name: https URL.')),
+          h('p', { className: 'muted' }, t('Paste a .mcp.json file.')),
           h('p', { className: 'muted' }, t('These run on this machine.')),
           h('textarea', {
-            value: draft, spellCheck: false, rows: 6,
+            value: draft, spellCheck: false, rows: 12, wrap: 'off',
+            className: 'json',
             onChange: (event) => { edited.current = true; setDraft(event.target.value); },
             'aria-label': t('MCP servers'),
           }),

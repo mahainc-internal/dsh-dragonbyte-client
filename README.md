@@ -39,12 +39,14 @@ picker: which tenants an address owns is a registry question the bridge answers
 on every publish, so handing the choice to a person would only be a way to
 answer it wrongly.
 
-**The MCP server list is typed here.** One line per server, either
-`name: command args` or `name: https://host/mcp`; `#` starts a comment. **Save
-servers** writes the list to the bridge first — the bridge is what every start
-reads it from — and only then to the local credential, which is the copy an
-offline start uses. Deleting every line is a real answer: the machine stops
-sharing and says so instead of publishing an empty catalog.
+**The MCP server list is a pasted `.mcp.json`.** Paste the file your editor
+already uses — `{ "mcpServers": { "name": { "url": … } } }` or
+`{ "command": …, "args": […] }`, with optional `headers` and `env`; the bare
+inner object is accepted too. **Save servers** writes the list to the bridge
+first — the bridge is what every start reads it from — and only then to the
+local credential, which is the copy an offline start uses. Deleting every entry
+is a real answer: the machine stops sharing and says so instead of publishing an
+empty catalog.
 
 ## AI models
 
@@ -112,8 +114,8 @@ avoids.
 
 | Transport | How to enter it | Notes |
 | --- | --- | --- |
-| `stdio` | `name: command args` | spawned on this machine, inherits its environment |
-| `http` | `name: https://host/path` | Streamable HTTP, optional static headers |
+| `stdio` | `{ "command": …, "args": [...] }` | spawned on this machine, inherits its environment |
+| `http` | `{ "url": "https://host/path", "headers": {...} }` | Streamable HTTP, optional static headers |
 
 Not supported, and refused rather than half-connected: legacy SSE transport,
 OAuth-protected servers, and anything that is not one of the two rows above.

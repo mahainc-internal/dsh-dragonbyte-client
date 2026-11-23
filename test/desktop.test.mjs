@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { bridgeUrlOf, labelOf, pairPageUrl, parseServerLines, serverLine } from '../src/desktop.mjs';
+import { bridgeUrlOf, labelOf, pairPageUrl, parseServerConfig, serverConfigText } from '../src/desktop.mjs';
 
 test('the pairing page is built on the bridge origin, not the desktop origin', () => {
   // ⚠ A DESKTOP SHELL SERVES ITS UI FROM `app://`, WHICH FIREBASE WILL NEVER
@@ -45,33 +45,57 @@ test('a pairing link names no callback, so nothing depends on loopback', () => {
   assert.equal(url.searchParams.has('code'), false);
 });
 
-test('typed lines become specs, and a bad line names the line it is on', () => {
-  // ⚠ ONE PARSER FOR THE PANEL AND THE HEADLESS PROMPT. A line means the same
-  // thing in Settings, in `--mcp`, and in the interactive prompt, so a panel
-  // with its own parser would be a second dialect of the same file format.
-  const specs = parseServerLines([
-    '# a comment',
-    'fs: npx -y @modelcontextprotocol/server-filesystem "~/My Docs"',
-    'search: https://mcp.example.test/sse',
-    '',
-  ].join('\n'));
+test('a pasted .mcp.json becomes specs, in the same format `--mcp` reads', () => {
+  // ⚠ THE FILE A PERSON PASTES IS THE FILE THEIR EDITOR SHOWS. This is the
+  // document form, including a header on one entry and a bare `url` on another.
+  const specs = parseServerConfig(JSON.stringify({
+    mcpServers: {
+      ios: { url: 'http://127.0.0.1:8765/mcp' },
+      openchatcut: {
+        type: 'streamable-http',
+        url: 'http://127.0.0.1:5199/api/external-mcp/mcp',
+        headers: { Authorization: 'Bearer abc' },
+      },
+      fs: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '~/My Docs'] },
+    },
+  }));
   assert.deepEqual(specs, [
-    { name: 'fs', transport: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '~/My Docs'], env: {} },
-    { name: 'search', transport: 'http', url: 'https://mcp.example.test/sse', headers: {} },
+    { name: 'ios', label: undefined, transport: 'http', url: 'http://127.0.0.1:8765/mcp', headers: {} },
+    { name: 'openchatcut', label: undefined, transport: 'http', url: 'http://127.0.0.1:5199/api/external-mcp/mcp', headers: { Authorization: 'Bearer abc' }, type: 'streamable-http' },
+    { name: 'fs', label: undefined, transport: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '~/My Docs'], env: {} },
   ]);
-
-  // ⚠ AN EMPTY LIST IS VALID, NOT A FAILURE. Deleting every server is how a
-  // machine stops sharing; the panel saves it and the host publishes nothing.
-  assert.deepEqual(parseServerLines(''), []);
-  assert.throws(() => parseServerLines('no colon here'), /line 1/);
-  assert.throws(() => parseServerLines('fs: npx -y x\nfs: npx -y y'), /listed twice/);
-  assert.throws(() => parseServerLines('Bad: npx'), /line 1/);
 });
 
-test('a server line round-trips through the panel', () => {
-  const line = 'fs: npx -y @modelcontextprotocol/server-filesystem ~/docs';
-  assert.equal(serverLine(parseServerLines(line)[0]), line);
-  assert.equal(serverLine({ name: 'x', transport: 'http', url: 'https://e.test/m' }), 'x: https://e.test/m');
+test('the bare mcpServers object is accepted, and an empty editor means no servers', () => {
+  // ⚠ COPYING THE INNER OBJECT OUT OF A LARGER FILE IS ORDINARY. Refusing it
+  // would be a formatting rule the person cannot see.
+  assert.deepEqual(parseServerConfig('{"s":{"url":"https://e.test/m"}}'), [
+    { name: 's', label: undefined, transport: 'http', url: 'https://e.test/m', headers: {} },
+  ]);
+  assert.deepEqual(parseServerConfig(''), []);
+  assert.deepEqual(parseServerConfig('   '), []);
+});
+
+test('a bad document says what is wrong instead of failing silently', () => {
+  assert.throws(() => parseServerConfig('{not json'), /not valid JSON/);
+  assert.throws(() => parseServerConfig('{"mcpServers":{"Bad_Name":{"url":"https://e.test"}}}'), /must match/);
+  assert.throws(() => parseServerConfig('{"mcpServers":{"x":{}}}'), /needs either "command"/);
+});
+
+test('the panel shows what it holds as the same document shape', () => {
+  const text = serverConfigText([
+    { name: 'ios', transport: 'http', url: 'http://127.0.0.1:8765/mcp', headers: {} },
+    { name: 'fs', transport: 'stdio', command: 'npx', args: ['-y', 'x'], env: {} },
+  ]);
+  assert.deepEqual(JSON.parse(text), {
+    mcpServers: {
+      ios: { url: 'http://127.0.0.1:8765/mcp' },
+      fs: { command: 'npx', args: ['-y', 'x'] },
+    },
+  });
+  // Round-trip: what the panel shows parses back to the same specs.
+  assert.deepEqual(parseServerConfig(text).map((s) => s.name), ['ios', 'fs']);
+  assert.deepEqual(JSON.parse(serverConfigText([])), { mcpServers: {} });
 });
 
 test('the machine names itself by hostname, unless a label is configured', () => {

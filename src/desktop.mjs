@@ -220,6 +220,13 @@ function apply(ctx, config = {}) {
         tenantId: state.credential.tenantId || '',
         catalog: catalog.catalog,
         call: catalog.call,
+        // ⚠ `connect` IS AN INJECTED DEPENDENCY, NOT A REFERENCE TO GLOBAL
+        // WebSocket — `serveBridge` defaults it to `undefined` so a test can
+        // drive the protocol without a socket. Omitting it here made `open()`
+        // throw `connect is not a function` on every start, so the machine
+        // held an open MCP connection, showed nothing, and never dialed the
+        // bridge. `host-main.mjs` has always passed this line.
+        connect: (url, { headers }) => new WebSocket(url, { headers }),
         onServers: (servers) => { state.credential.mcpServers = servers; },
       });
       state.status = 'connected';

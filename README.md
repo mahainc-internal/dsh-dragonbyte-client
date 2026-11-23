@@ -27,12 +27,15 @@ picker: which tenants an address owns is a registry question the bridge answers
 on every publish, so handing the choice to a person would only be a way to
 answer it wrongly.
 
-**The MCP server list is edited in one place, and it is not this section.**
-`Settings -> DragonByte` shows the servers a machine is serving and links to
-**Edit servers on DragonByte**, the bridge's own page, where they are typed and
-saved. That is the one editor: a pair of them would give one config two writers.
-The link carries a code the machine mints from its device token each time the
-section loads, so it never holds a token and never goes stale.
+**The MCP server list is typed here.** One line per server, either
+`name: command args` or `name: https://host/mcp`; `#` starts a comment. **Save
+servers** writes the list to the bridge first — the bridge is what every start
+reads it from — and only then to the local credential, which is the copy an
+offline start uses. Deleting every line is a real answer: the machine stops
+sharing and says so instead of publishing an empty catalog.
+
+The pairing page no longer has an editor. It signs a browser in and hands the
+code back to the machine; the list has one home, and this is it.
 
 ⚠ **The browser step is not optional, and it cannot happen inside the app.** A
 desktop shell serves its UI from an `app://` origin, which Firebase will never
@@ -87,7 +90,7 @@ Limits worth knowing before you plan around them:
 | What | Where |
 | --- | --- |
 | the device token and tenant binding | `~/.config/dsh-dragonbyte/credential.json` (0600) |
-| the MCP server list | the bridge's **Edit servers on DragonByte** page, cached in the credential and re-read at every start |
+| the MCP server list | the bridge's paired-device store, typed in `Settings -> DragonByte` and cached in the credential for an offline start |
 | revocation | `Settings -> DragonByte -> Disconnect` |
 
 Override the config location with `DSH_DRAGONBYTE_CONFIG_DIR`.

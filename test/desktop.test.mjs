@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { bridgeUrlOf, pairPageUrl } from '../src/desktop.mjs';
+import { bridgeUrlOf, pairPageUrl, parseServerLines, serverLine } from '../src/desktop.mjs';
 
 test('the pairing page is built on the bridge origin, not the desktop origin', () => {
   // ⚠ A DESKTOP SHELL SERVES ITS UI FROM `app://`, WHICH FIREBASE WILL NEVER
@@ -28,12 +28,39 @@ test('a configured bridge replaces the default, and `ws` becomes `http` for the 
   assert.equal(bridgeUrlOf({}), 'wss://edge01.snapai.app/dragonbyte/ws');
 });
 
-test('an editor link carries a code and no callback, because the page refuses both together', () => {
-  // ⚠ THE PAGE TREATS `code` AS EDITOR MODE ONLY WHEN NO `callback` ACCOMPANIES
-  // IT; with both it runs as a pairing attempt and refuses a non-loopback
-  // callback. An empty parameter is still a parameter, so it must be absent.
-  const url = new URL(pairPageUrl({ bridgeUrl: 'wss://edge01.snapai.app/dragonbyte/ws', code: 'c'.repeat(43) }));
-  assert.equal(url.searchParams.has('callback'), false);
-  assert.equal(url.searchParams.has('tenant'), false);
-  assert.equal(url.searchParams.get('code'), 'c'.repeat(43));
+test('the pairing page link carries the loopback callback and nothing else', () => {
+  // ⚠ NO CODE PARAMETER ANY MORE. The page no longer edits a server list, so a
+  // link holding a code would be a second way into one device's settings.
+  const url = new URL(pairPageUrl({ bridgeUrl: 'wss://edge01.snapai.app/dragonbyte/ws', callback: 'http://127.0.0.1:49152/dragonbyte/pair/callback' }));
+  assert.equal(url.searchParams.has('code'), false);
+  assert.equal(url.searchParams.get('callback'), 'http://127.0.0.1:49152/dragonbyte/pair/callback');
+});
+
+test('typed lines become specs, and a bad line names the line it is on', () => {
+  // ⚠ ONE PARSER FOR THE PANEL AND THE HEADLESS PROMPT. A line means the same
+  // thing in Settings, in `--mcp`, and in the interactive prompt, so a panel
+  // with its own parser would be a second dialect of the same file format.
+  const specs = parseServerLines([
+    '# a comment',
+    'fs: npx -y @modelcontextprotocol/server-filesystem "~/My Docs"',
+    'search: https://mcp.example.test/sse',
+    '',
+  ].join('\n'));
+  assert.deepEqual(specs, [
+    { name: 'fs', transport: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '~/My Docs'], env: {} },
+    { name: 'search', transport: 'http', url: 'https://mcp.example.test/sse', headers: {} },
+  ]);
+
+  // ⚠ AN EMPTY LIST IS VALID, NOT A FAILURE. Deleting every server is how a
+  // machine stops sharing; the panel saves it and the host publishes nothing.
+  assert.deepEqual(parseServerLines(''), []);
+  assert.throws(() => parseServerLines('no colon here'), /line 1/);
+  assert.throws(() => parseServerLines('fs: npx -y x\nfs: npx -y y'), /listed twice/);
+  assert.throws(() => parseServerLines('Bad: npx'), /line 1/);
+});
+
+test('a server line round-trips through the panel', () => {
+  const line = 'fs: npx -y @modelcontextprotocol/server-filesystem ~/docs';
+  assert.equal(serverLine(parseServerLines(line)[0]), line);
+  assert.equal(serverLine({ name: 'x', transport: 'http', url: 'https://e.test/m' }), 'x: https://e.test/m');
 });

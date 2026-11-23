@@ -20,7 +20,7 @@ import { createInterface } from 'node:readline/promises';
 import { spawn } from 'node:child_process';
 
 import { connectServers, serveBridge } from './host.mjs';
-import { credentialPath, loadCredential, saveCredential } from './host-main.mjs';
+import { credentialPath, loadCredential, saveCredential, parseServerLine } from './host-main.mjs';
 
 export const name = 'dragonbyte';
 export const inject = ['webServer'];
@@ -56,34 +56,67 @@ export function bridgeUrlOf(env = process.env) {
 }
 
 /**
- * Turn a device token into a fresh editor code, or `''` when it cannot.
+ * Ask the bridge for a short-lived editor code, or `''` when it cannot answer.
  *
- * ⚠ THE EDITOR CODE IS NOT KEPT, BECAUSE IT CANNOT BE. It is minted by the
- * bridge, expires in an hour, and lives only in that process's memory; a code
- * saved beside the credential would be dead by the time a person clicked. The
- * device token is signed and lasts as long as the link could be wanted.
+ * ⚠ THE CODE IS NOT KEPT, BECAUSE IT CANNOT BE. The bridge holds it in memory
+ * for an hour; a copy saved beside the credential would be dead by the time a
+ * person used it. The device token is signed and can always ask again.
  */
-async function editorCodeOf({ bridgeUrl, token }) {
+async function editorCodeOf({ bridgeUrl, token, mcpServers }) {
   if (!token) return '';
-  try {
-    const response = await fetch(`${bridgeUrl.replace(/^ws/, 'http')}/dragonbyte/pair/servers`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }),
-    });
-    if (!response.ok) return '';
-    const body = await response.json();
-    return typeof body?.code === 'string' ? body.code : '';
-  } catch { return ''; }
+  const response = await fetch(`${bridgeUrl.replace(/^ws/, 'http')}/dragonbyte/pair/servers`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(mcpServers === undefined ? { token } : { token, mcpServers }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw badRequest(body?.error || 'the bridge refused that server list');
+  }
+  const body = await response.json();
+  return typeof body?.code === 'string' ? body.code : '';
 }
 
-export function pairPageUrl({ bridgeUrl, tenantId = '', callback = '', code = '' }) {
+export function pairPageUrl({ bridgeUrl, tenantId = '', callback = '' }) {
   const url = new URL('/dragonbyte/pair/start', bridgeUrl.replace(/^ws/, 'http'));
-  // ⚠ ONLY THE PARAMETERS THAT EXIST. An empty `callback` sent along with a code
-  // makes the page think it is a pairing attempt and refuse it as non-loopback,
-  // so the editor link must not carry one.
+  // ⚠ ONLY THE PARAMETERS THAT EXIST. An empty `tenant` would be sent as a
+  // tenant named "", which reads as a choice nobody made.
   if (tenantId) url.searchParams.set('tenant', tenantId);
   if (callback) url.searchParams.set('callback', callback);
-  if (code) url.searchParams.set('code', code);
   return url.toString();
+}
+
+const badRequest = (message) => Object.assign(new Error(message), { status: 400 });
+
+/**
+ * Typed lines -> the spec objects `connectServers` and the bridge both take.
+ *
+ * ⚠ ONE LINE, ONE SERVER, AND THE COMMAND IS NOT RUN THROUGH A SHELL. The parse
+ * is `parseServerLine`, the same one the headless prompt uses, so a line means
+ * the same thing here, there, and on a Windows machine.
+ */
+export function parseServerLines(text) {
+  const specs = [];
+  const seen = new Set();
+  String(text ?? '').split('\n').forEach((raw, index) => {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) return;
+    const at = line.indexOf(':');
+    if (at < 1) throw badRequest(`line ${index + 1}: write "name: command" or "name: https://url"`);
+    const name = line.slice(0, at).trim();
+    if (seen.has(name)) throw badRequest(`line ${index + 1}: ${name} is listed twice`);
+    seen.add(name);
+    try { specs.push(parseServerLine(name, line.slice(at + 1))); }
+    catch (error) { throw badRequest(`line ${index + 1}: ${error.message}`); }
+  });
+  return specs;
+}
+
+/** One spec -> the line this panel shows and a person edits. */
+export function serverLine(spec) {
+  if (!spec || typeof spec !== 'object') return '';
+  if (spec.transport === 'http') return `${spec.name}: ${spec.url}`;
+  return `${spec.name}: ${[spec.command, ...(spec.args ?? [])].join(' ')}`;
 }
 
 function openBrowser(url) {
@@ -134,9 +167,9 @@ function apply(ctx, config = {}) {
       // ⚠ THE LIST IS READ FROM THE EDITOR BEFORE EACH CONNECT. A list saved on
       // the bridge after this machine last ran is what the person meant; the
       // copy in the credential is a cache for an offline start.
-      const code = await editorCodeOf({ bridgeUrl, token: state.credential.token });
-      if (code) {
-        try {
+      try {
+        const code = await editorCodeOf({ bridgeUrl, token: state.credential.token });
+        if (code) {
           const url = `${bridgeUrl.replace(/^ws/, 'http')}/dragonbyte/pair/servers?code=${encodeURIComponent(code)}`;
           const response = await fetch(url, { cache: 'no-store' });
           if (response.ok) {
@@ -149,8 +182,8 @@ function apply(ctx, config = {}) {
               await saveCredential(state.credential);
             }
           }
-        } catch { /* offline: keep the cached list */ }
-      }
+        }
+      } catch { /* offline: keep the cached list, which is what lets it start */ }
       const specs = Array.isArray(state.credential.mcpServers) ? state.credential.mcpServers : [];
       // ⚠ AN EMPTY CATALOG IS NOT PUBLISHED. Binding a tenant to a host that can
       // do nothing is worse than being offline, so a machine with no servers
@@ -233,27 +266,36 @@ function apply(ctx, config = {}) {
     return { tenantId: state.credential.tenantId };
   }
 
+  /**
+   * Save the list the panel holds, then reconnect with it.
+   *
+   * ⚠ THE BRIDGE IS WRITTEN FIRST, AND THE CREDENTIAL ONLY AFTER IT AGREES. The
+   * bridge re-reads this list on the machine's next start, so a save that never
+   * reached it must not look saved here. The credential copy is what lets an
+   * offline start publish the list the person last confirmed.
+   *
+   * ⚠ AN EMPTY LIST IS SAVED, NOT SKIPPED. Deleting every server is how a
+   * machine stops sharing; `start()` then publishes nothing and says so.
+   */
+  async function saveServers(text) {
+    const specs = parseServerLines(text);
+    await editorCodeOf({ bridgeUrl, token: state.credential?.token, mcpServers: specs });
+    state.credential = { ...(state.credential ?? {}), mcpServers: specs };
+    await saveCredential(state.credential);
+    await start();
+  }
+
   const publicStatus = () => ({
     status: state.status,
     ...(state.error ? { error: state.error } : {}),
     tenantId: state.credential?.tenantId || '',
     paired: Boolean(state.credential?.token),
-    servers: state.credential?.mcpServers ?? [],
+    // The list as text, because this panel is where it is typed. The credential
+    // holds specs; the panel holds one line per server.
+    servers: (state.credential?.mcpServers ?? []).map(serverLine).join('\n'),
     credentialPath: credentialPath(),
   });
 
-  /**
-   * ⚠ ONE EDITOR, ON THE BRIDGE. This machine cannot write a server list the
-   * gateway would accept, so Settings opens the page rather than duplicating it.
-   * The link is minted per request because its code is short-lived.
-   */
-  // ⚠ EVERY ANSWER THAT REPLACES THE PANEL'S STATE INCLUDES IT. The section sets
-  // its whole state from whichever route answered, so a `publicStatus()` without
-  // this would drop a link that was there a moment ago.
-  async function answer() {
-    const code = await editorCodeOf({ bridgeUrl, token: state.credential?.token });
-    return { ...publicStatus(), editorUrl: pairPageUrl({ bridgeUrl, code }) };
-  }
 
   const routes = [
     ctx.webServer.register({
@@ -261,21 +303,26 @@ function apply(ctx, config = {}) {
       handler: async (req, res) => {
         const url = new URL(req.url || '/', 'http://host.invalid');
         try {
-          if (url.pathname === '/dragonbyte/status' && req.method === 'GET') return json(res, 200, await answer());
+          if (url.pathname === '/dragonbyte/status' && req.method === 'GET') return json(res, 200, publicStatus());
           if (url.pathname === '/dragonbyte/pair' && req.method === 'POST') {
             const body = await readBody(req);
             await pair({ tenantId: typeof body?.tenantId === 'string' ? body.tenantId : '' });
-            return json(res, 200, await answer());
+            return json(res, 200, publicStatus());
+          }
+          if (url.pathname === '/dragonbyte/servers' && req.method === 'PUT') {
+            const body = await readBody(req);
+            await saveServers(typeof body?.text === 'string' ? body.text : '');
+            return json(res, 200, publicStatus());
           }
           if (url.pathname === '/dragonbyte/credential' && req.method === 'DELETE') {
             state.credential = { token: '', refreshToken: '', expiresAt: 0, tenantId: '', mcpServers: state.credential?.mcpServers ?? [] };
             await saveCredential(state.credential);
             await stop();
-            return json(res, 200, await answer());
+            return json(res, 200, publicStatus());
           }
           if (url.pathname === '/dragonbyte/reconnect' && req.method === 'POST') {
             await start();
-            return json(res, 200, await answer());
+            return json(res, 200, publicStatus());
           }
           return json(res, 404, { error: 'not found' });
         } catch (error) {

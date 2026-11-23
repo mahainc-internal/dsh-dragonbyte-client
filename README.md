@@ -9,14 +9,14 @@ Two ways to run it, and they install differently:
 | Where | What you get | How it installs |
 | --- | --- | --- |
 | a DSH Desktop (or any DSH Host) | `Settings -> DragonByte`, with pairing, the bridged servers and status | as a DSH **plugin bundle** |
-| a plain machine | a headless host process | `npx -y @snapai/dsh-dragonbyte-client` |
+| a plain machine | a headless host process | `npx -y dsh-dragonbyte-client` |
 
 ## In DSH Desktop
 
 Install the bundle through the Plugin Manager, or point it at the npm package:
 
 ```
-Plugin Manager -> install  @snapai/dsh-dragonbyte-client
+Plugin Manager -> install  dsh-dragonbyte-client
 Settings -> DragonByte -> Pair this machine
 ```
 
@@ -59,7 +59,7 @@ the one-time code that comes back.
 
 ```sh
 # in a DSH tenant: Settings -> DragonByte -> Create token, then:
-npx -y @snapai/dsh-dragonbyte-client
+npx -y dsh-dragonbyte-client
 #    paste the token; answer once for each MCP server
 ```
 

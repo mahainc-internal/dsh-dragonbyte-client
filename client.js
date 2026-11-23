@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@snapai/dsh-dragonbyte-client',
+  id: 'dsh-dragonbyte-client',
   factory(require) {
     const React = require('react');
     const h = React.createElement;

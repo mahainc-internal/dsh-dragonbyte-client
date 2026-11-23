@@ -72,6 +72,10 @@ printed, and opening it anywhere finishes the pairing.
 The credential is saved in `~/.config/dsh-dragonbyte/credential.json` and the
 host renews its own token before it expires.
 
+`--name` sets what the tenant's device list calls this machine. It is spent at
+pairing, because that is when the bridge records the name, so pass it on the
+first run; `DSH_DRAGONBYTE_LABEL` does the same thing through the environment.
+
 ## What it does
 
 One outbound WebSocket to `edge01.snapai.app/dragonbyte/ws`, then it publishes a
@@ -127,6 +131,7 @@ dsh-dragonbyte-host --bridge wss://edge01.snapai.app/dragonbyte/ws
 | --- | --- |
 | `--bridge <url>` | bridge WebSocket; defaults to `DSH_DRAGONBYTE_BRIDGE` or the edge01 URL |
 | `--mcp <mcp.json>` | a standard `{ "mcpServers": { … } }` file instead of the saved list |
+| `--name <name>` | what the tenant's device list calls this machine (default: its hostname) |
 | `--tenant <id>` | required only when this address owns more than one tenant |
 | `DSH_DRAGONBYTE_TOKEN` | skips the browser and uses a device token you already hold |
 | `DSH_DRAGONBYTE_CONFIG_DIR` | where `credential.json` lives |

@@ -130,6 +130,23 @@ test('a machine with no browser still gets the URL to open elsewhere', async () 
   assert.match(lines.join('\n'), /\/dragonbyte\/pair\/start\?handle=/);
 });
 
+test('a given name beats the hostname, and an empty one falls back to it', async () => {
+  // ⚠ REDEMPTION IS THE ONLY MOMENT A MACHINE CAN NAME ITSELF. The bridge stores
+  // the name with the device there and never accepts a rename, so a flag that
+  // did not reach this call would be a flag that silently did nothing.
+  const labelSent = async (extra) => {
+    const { http, requests } = fakeBridge({ redeemBody: CREDENTIAL });
+    await pairWithBrowser({
+      bridgeUrl: 'ws://127.0.0.1:3500/dragonbyte/ws',
+      env: { DSH_DRAGONBYTE_LABEL: 'from-env' }, http, open: () => {}, log: () => {}, ...extra,
+    });
+    return JSON.parse(requests.find((entry) => entry.path === '/dragonbyte/pair/redeem').body).label;
+  };
+  assert.equal(await labelSent({ label: 'office-mini' }), 'office-mini');
+  assert.equal(await labelSent({ label: '   ' }), 'from-env');
+  assert.equal(await labelSent({}), 'from-env');
+});
+
 test('the origin swap keeps a ws bridge on http and a wss one on https', () => {
   assert.equal(httpBaseOf('wss://edge01.snapai.app/dragonbyte/ws'), 'https://edge01.snapai.app');
   assert.equal(httpBaseOf('ws://127.0.0.1:3500/dragonbyte/ws'), 'http://127.0.0.1:3500');

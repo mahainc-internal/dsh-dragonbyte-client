@@ -70,7 +70,7 @@ function readlineAsk() {
 }
 
 function parseArgs(argv) {
-  const args = { bridge: '', mcp: '', tenant: '' };
+  const args = { bridge: '', mcp: '', tenant: '', name: '' };
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     const value = argv[index + 1];
@@ -81,6 +81,7 @@ function parseArgs(argv) {
     else if (flag === '--bridge') { args.bridge = value ?? ''; index += 1; }
     else if (flag === '--mcp') { args.mcp = value ?? ''; index += 1; }
     else if (flag === '--tenant') { args.tenant = value ?? ''; index += 1; }
+    else if (flag === '--name') { args.name = value ?? ''; index += 1; }
     else if (flag === '--help' || flag === '-h') args.help = true;
   }
   return args;
@@ -183,8 +184,9 @@ export async function promptServers(ask, log = console.log) {
 export async function main(argv = process.argv.slice(2), env = process.env, io = {}) {
   const args = parseArgs(argv);
   if (args.help) {
-    console.log('usage: dsh-dragonbyte-host [--bridge <wss url>] [--mcp <mcp.json>]');
+    console.log('usage: dsh-dragonbyte-host [--bridge <wss url>] [--mcp <mcp.json>] [--name <machine name>]');
     console.log('The first run opens a browser to pair this machine; nothing has to be copied.');
+    console.log('--name sets what the tenant\'s device list calls this machine (default: its hostname).');
     console.log('The credential is saved in ~/.config/dsh-dragonbyte and renewed by itself.');
     return 0;
   }
@@ -217,12 +219,12 @@ export async function main(argv = process.argv.slice(2), env = process.env, io =
     // DSH Desktop has used it since it shipped. Asking for a paste here made the
     // terminal the only place a person could not pair the same way.
     const pasted = env.DSH_DRAGONBYTE_TOKEN || '';
-    if (pasted) {
-      credential = { token: pasted.trim(), refreshToken: '', expiresAt: 0, tenantId: args.tenant || env.DSH_DRAGONBYTE_TENANT || '' };
+    if (pasted) {      credential = { token: pasted.trim(), refreshToken: '', expiresAt: 0, tenantId: args.tenant || env.DSH_DRAGONBYTE_TENANT || '' };
       mcpServers = null;
     } else {
       const issued = await pairWithBrowser({
         bridgeUrl: bridge, tenantId: args.tenant || env.DSH_DRAGONBYTE_TENANT || '', env, log: (line) => console.log(line),
+        label: args.name || env.DSH_DRAGONBYTE_LABEL || '',
       });
       credential = { ...issued, mcpServers: [] };
       // ⚠ SAVED BEFORE THE FIRST CONNECT, NOT AFTER IT. A machine that paired

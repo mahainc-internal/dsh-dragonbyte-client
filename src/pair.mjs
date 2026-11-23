@@ -156,6 +156,10 @@ async function redeem({ bridgeUrl, code, label, http }) {
 export async function pairWithBrowser({
   bridgeUrl, tenantId = '', env = process.env, log = () => {}, onPage = () => {},
   open = openBrowser, http = globalThis.fetch, timeoutMs = WAIT_TTL_MS + 30_000,
+  // ⚠ A GIVEN NAME BEATS THE HOSTNAME, AND BOTH BEAT NOTHING. This is the only
+  // moment a machine can say what it is called: the bridge stores the name with
+  // the device at redemption and never accepts a rename afterwards.
+  label,
 }) {
   const handle = randomBytes(16).toString('base64url');
   // Registered before the page is opened: a person can finish a sign-in faster
@@ -180,7 +184,8 @@ export async function pairWithBrowser({
     catch (error) { log(`dragonbyte-host: could not open a browser (${error?.message || error}); open the URL above`); }
     const code = await waiting;
     log('dragonbyte-host: sign-in finished; taking the device credential');
-    return await redeem({ bridgeUrl, code, label: labelOf(env), http });
+    const named = typeof label === 'string' && label.trim() ? label.trim().slice(0, 80) : labelOf(env);
+    return await redeem({ bridgeUrl, code, label: named, http });
   } finally {
     clearTimeout(timer);
   }

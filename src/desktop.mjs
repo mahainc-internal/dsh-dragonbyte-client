@@ -285,6 +285,28 @@ function apply(ctx, config = {}) {
     });
   }
 
+  /**
+   * Adopt a device token typed into Settings.
+   *
+   * ⚠ THIS IS THE PATH THAT DOES NOT NEED A BROWSER OR A CODE. A token minted in
+   * the tenant's own Settings -> DragonByte proves the same thing a pairing code
+   * does, and this machine already knows how to hold one: the headless host has
+   * taken a pasted token since it existed. Refusing it here only meant a desktop
+   * had to route the same proof through a page instead.
+   *
+   * ⚠ THE PREFIX IS CHECKED BEFORE ANYTHING IS SAVED. A pasted line that is not
+   * a device token is a paste mistake, not a credential — writing it would make
+   * "paired" true and every call fail afterwards.
+   */
+  async function adoptToken(text) {
+    const token = String(text ?? '').trim();
+    if (!token) throw badRequest('a device token is required');
+    if (!/^dbt1[.A-Za-z0-9_-]+$/.test(token)) throw badRequest('that is not a device token (it should start with dbt1)');
+    state.credential = { token, refreshToken: '', expiresAt: 0, tenantId: '', mcpServers: state.credential?.mcpServers ?? [] };
+    await saveCredential(state.credential);
+    await start();
+  }
+
   async function redeem(code) {
     const response = await fetch(`${bridgeUrl.replace(/^ws/, 'http')}/dragonbyte/pair/redeem`, {
       method: 'POST',
@@ -346,6 +368,11 @@ function apply(ctx, config = {}) {
           if (url.pathname === '/dragonbyte/pair' && req.method === 'POST') {
             const body = await readBody(req);
             await pair({ tenantId: typeof body?.tenantId === 'string' ? body.tenantId : '' });
+            return json(res, 200, publicStatus());
+          }
+          if (url.pathname === '/dragonbyte/token' && req.method === 'PUT') {
+            const body = await readBody(req);
+            await adoptToken(body?.token);
             return json(res, 200, publicStatus());
           }
           if (url.pathname === '/dragonbyte/servers' && req.method === 'PUT') {

@@ -13,6 +13,10 @@ window.__ModuleLoader__.load({
       'Not paired yet.': '尚未配对。',
       'Open Google sign-in in your browser, approve this machine, then come back.': '在浏览器中打开 Google 登录，批准此机器后返回。',
       'Keep this window open. Finish the sign-in in your browser; this finishes on its own.': '请保持此窗口打开。在浏览器中完成登录，此处会自动完成。',
+      'Device token': '设备令牌',
+      'Mint one in this tenant\'s Settings -> DragonByte -> Create token, then paste it here. Use this instead of the browser when pairing cannot finish there.': '在此租户的 设置 -> DragonByte -> 创建令牌 中生成一个，然后粘贴到此处。当浏览器配对无法完成时，请改用此方式。',
+      'Use token': '使用令牌',
+      'That token was refused.': '该令牌被拒绝。',
       'MCP servers': 'MCP 服务器',
       'Reconnect': '重新连接',
       'Disconnect': '断开连接',
@@ -70,6 +74,7 @@ window.__ModuleLoader__.load({
       // ⚠ A REFRESH MUST NOT EAT A HALF-TYPED LINE. The field takes the host's
       // value until the person types in it; a save clears this again.
       const edited = React.useRef(false);
+      const [tokenDraft, setTokenDraft] = React.useState('');
       const [error, setError] = React.useState('');
       const [busy, setBusy] = React.useState('');
 
@@ -108,6 +113,22 @@ window.__ModuleLoader__.load({
           });
           setError('');
         } catch (failure) { setError(failure.message || 'Could not pair. Try again.'); }
+        finally { setBusy(''); void load(); }
+      }
+
+      async function adopt() {
+        setBusy('token');
+        try {
+          // ⚠ THE HOST VALIDATES THE PREFIX BEFORE IT SAVES. A paste mistake is
+          // answered here as a message rather than becoming a credential that
+          // reads as paired and fails on every call after it.
+          await call('token', {
+            method: 'PUT', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ token: tokenDraft }),
+          });
+          setTokenDraft('');
+          setError('');
+        } catch (failure) { setError(failure.message || 'That token was refused.'); }
         finally { setBusy(''); void load(); }
       }
 
@@ -160,6 +181,23 @@ window.__ModuleLoader__.load({
                 t('Reconnect')) : null,
               state.paired ? h('button', { type: 'button', disabled: busy !== '', onClick: () => void disconnect() },
                 busy === 'revoke' ? t('Revoking…') : t('Disconnect')) : null))),
+
+        // ⚠ A TOKEN TYPED HERE IS THE WHOLE PROOF; NO BROWSER IS INVOLVED. The
+        // tenant's own Settings can mint a device token, and a machine that has
+        // one is exactly as paired as one that walked a sign-in page. Offering
+        // only the browser made a refused popup or a blocked callback the end of
+        // the road, for a credential the person already had in hand.
+        h('div', { className: 'group' },
+          h('h3', null, t('Device token')),
+          h('p', { className: 'muted' }, t('Mint one in this tenant\'s Settings -> DragonByte -> Create token, then paste it here. Use this instead of the browser when pairing cannot finish there.')),
+          h('textarea', {
+            value: tokenDraft, spellCheck: false, rows: 3,
+            onChange: (event) => setTokenDraft(event.target.value),
+            'aria-label': t('Device token'),
+          }),
+          h('div', { className: 'actions' },
+            h('button', { type: 'button', disabled: busy !== '' || tokenDraft.trim() === '', onClick: () => void adopt() },
+              busy === 'token' ? t('Saving…') : t('Use token')))),
 
         // ⚠ THIS IS THE ONE EDITOR. A save goes to the bridge, which is what
         // re-reads the list on every start, and the bridge's copy is written

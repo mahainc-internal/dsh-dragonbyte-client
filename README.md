@@ -46,6 +46,28 @@ reads it from — and only then to the local credential, which is the copy an
 offline start uses. Deleting every line is a real answer: the machine stops
 sharing and says so instead of publishing an empty catalog.
 
+## AI models
+
+**Pairing is the whole configuration.** The device token this machine already
+holds is a credential the DSH AI gateway accepts, so once paired the plugin adds
+the gateway's models to DSH's model picker on its own. There is no address to
+type and no second sign-in.
+
+Every model is registered with a 400,000-token context window and both `text`
+and `image` input, because the gateway's model list reports neither.
+
+**Disconnect withdraws the models as well as the MCP tools.** A token the gateway
+refuses removes the provider rather than leaving models in the picker that every
+call then fails to use.
+
+⚠ **The registration needs a Host that mounts model settings.** A Host without a
+profile context has no Models page and no settings service; on it the plugin
+still serves MCP servers and the panel says so instead of failing.
+
+⚠ **The device token lives seven days, and revocation — not expiry — is what
+withdraws a machine.** Both the bridge and the gateway check the revocation list
+per request, so Disconnect takes effect without waiting for the token to age out.
+
 The pairing page no longer has an editor. It signs a browser in and hands the
 code back to the machine; the list has one home, and this is it.
 

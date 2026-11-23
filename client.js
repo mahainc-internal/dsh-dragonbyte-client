@@ -26,6 +26,10 @@ window.__ModuleLoader__.load({
       'These run on this machine.': '这些服务器在此机器上运行。',
       'Save servers': '保存服务器',
       'Saving…': '正在保存…',
+      'AI models': 'AI 模型',
+      'AI models ready': 'AI 模型已就绪',
+      'AI models appear after this machine is paired.': '配对后此机器会提供 AI 模型。',
+      'This Host has no model settings.': '此主机没有模型设置。',
       'Could not reach the local host.': '无法连接本地主机。',
       'Could not pair. Try again.': '无法配对，请重试。',
       'Revoking…': '正在撤销…',
@@ -182,7 +186,23 @@ window.__ModuleLoader__.load({
           }),
           h('div', { className: 'actions' },
             h('button', { type: 'button', disabled: busy !== '', onClick: () => void save() },
-              busy === 'save' ? t('Saving…') : t('Save servers')))));
+              busy === 'save' ? t('Saving…') : t('Save servers')))),
+
+        // ⚠ THERE IS NO GATEWAY CONTROL HERE. Pairing is the whole configuration:
+        // this machine's device token is what the gateway accepts, and the plugin
+        // registers the models itself. The row only reports whether that worked,
+        // because a silent failure would look like a gateway with no models.
+        h('div', { className: 'group' },
+          h('h3', null, t('AI models')),
+          h('p', { className: 'muted' }, state.modelCount
+            ? `${t('AI models ready')}: ${state.modelCount}`
+            : t('AI models appear after this machine is paired.')),
+          state.gatewayError
+            ? h('p', { className: 'muted', role: 'alert' }, state.gatewayError)
+            : null,
+          state.modelsUnavailable
+            ? h('p', { className: 'muted' }, t('This Host has no model settings.'))
+            : null));
     }
 
     return {

@@ -18,12 +18,23 @@
 import { connectServers, serveBridge } from './host.mjs';
 import { credentialPath, loadCredential, saveCredential, parseServerLine } from './host-main.mjs';
 import { editorCodeOf, httpBaseOf, labelOf, pairPageUrl, pairWithBrowser } from './pair.mjs';
+import { fetchGatewayModels, syncProvider, removeProvider } from './provider.mjs';
 
 export const name = 'dragonbyte';
+// ⚠ `settings` AND `credentials` ARE OPTIONAL, NOT REQUIRED. They are what makes
+// the AI gateway usable, and a Host without them can still serve MCP servers;
+// requiring them would turn a late-arriving service into a plugin that never
+// loads. The registration is attempted through `ctx.inject` and skipped quietly
+// when the Host has no model settings surface.
 export const inject = ['webServer'];
 
-const DEFAULT_BRIDGE = 'wss://edge01.snapai.app/dragonbyte/ws';
+// The gateway's models are not a panel setting any more — the address is a fact
+// about this deployment, and the token is the one pairing already minted.
+export { GATEWAY_BASE_URL as DEFAULT_AI_GATEWAY } from './provider.mjs';
 
+const badRequest = (message) => Object.assign(new Error(message), { status: 400 });
+
+const DEFAULT_BRIDGE = 'wss://edge01.snapai.app/dragonbyte/ws';
 // ⚠ RE-EXPORTED, NOT REIMPLEMENTED. The pairing flow moved into `pair.mjs` so
 // the headless host runs the same one; these two names are what callers and
 // tests already reach for on this module.
@@ -52,8 +63,6 @@ const readBody = (req, limit = 256 * 1024) => new Promise((resolve, reject) => {
 export function bridgeUrlOf(env = process.env) {
   return env.DSH_DRAGONBYTE_BRIDGE || DEFAULT_BRIDGE;
 }
-
-const badRequest = (message) => Object.assign(new Error(message), { status: 400 });
 
 /**
  * Typed lines -> the spec objects `connectServers` and the bridge both take.
@@ -95,11 +104,41 @@ function apply(ctx, config = {}) {
     status: 'idle',
     error: '',
     connecting: null,
+    // Filled by the `settings`/`credentials` injection below; null on a Host
+    // that has no model settings surface.
+    models: null,
+    gatewayModels: [],
+    gatewayError: '',
   };
 
   async function load() {
     try { state.credential = await loadCredential(); }
     catch (error) { state.error = error?.message || String(error); state.status = 'error'; }
+  }
+
+  /** Ask the gateway what models this device token may use, then register them. */
+  async function refreshGatewayModels({ fetchImpl = fetch } = {}) {
+    if (!state.credential?.token) return;
+    try {
+      const { models } = await fetchGatewayModels(state.credential.token, { fetchImpl });
+      state.gatewayModels = models;
+      state.gatewayError = '';
+    } catch (error) {
+    // ⚠ A REFUSED TOKEN WITHDRAWS THE ROUTE. Leaving a provider whose key the
+      // gateway rejects turns "you were disconnected" into "every model fails".
+      state.gatewayModels = [];
+      state.gatewayError = error?.message || String(error);
+    }
+    // ⚠ THE ROUTE FOLLOWS THE ANSWER ON BOTH PATHS. A refresh that now succeeds
+    // must restore a route a previous refusal removed, and one that fails must
+    // remove it — `syncProvider` decides from `gatewayModels` alone.
+    if (state.models && state.credential?.token) {
+      try {
+        await syncProvider({ settings: state.models.settings, credentials: state.models.credentials, token: state.gatewayModels.length ? state.credential.token : '', models: state.gatewayModels });
+      } catch (error) {
+        state.gatewayError = error?.message || String(error);
+      }
+    }
   }
 
   /** Stop the MCP clients and the socket. Safe to call repeatedly. */
@@ -193,6 +232,7 @@ function apply(ctx, config = {}) {
     };
     await saveCredential(state.credential);
     await start();
+    void refreshGatewayModels();
     return { tenantId: state.credential.tenantId };
   }
 
@@ -216,6 +256,7 @@ function apply(ctx, config = {}) {
     state.credential = { token, refreshToken: '', expiresAt: 0, tenantId: '', mcpServers: state.credential?.mcpServers ?? [] };
     await saveCredential(state.credential);
     await start();
+    void refreshGatewayModels();
   }
 
   /**
@@ -255,6 +296,13 @@ function apply(ctx, config = {}) {
     // holds specs; the panel holds one line per server.
     servers: (state.credential?.mcpServers ?? []).map(serverLine).join('\n'),
     credentialPath: credentialPath(),
+    // ⚠ A COUNT, NOT THE MODELS. The panel does not choose or configure the
+    // gateway any more; it reports that pairing produced models, and a failure
+    // sentence when it did not, so a person can tell "paired but the gateway
+    // refused this token" from "paired and working".
+    modelCount: state.gatewayModels.length,
+    ...(state.models ? {} : { modelsUnavailable: 'this Host has no model settings' }),
+    ...(state.gatewayError ? { gatewayError: state.gatewayError } : {}),
   });
 
 
@@ -284,6 +332,12 @@ function apply(ctx, config = {}) {
             state.credential = { token: '', refreshToken: '', expiresAt: 0, tenantId: '', mcpServers: state.credential?.mcpServers ?? [] };
             await saveCredential(state.credential);
             await stop();
+            // ⚠ DISCONNECT WITHDRAWS THE MODELS TOO. The device token was the
+            // provider's only credential; leaving the route behind would keep
+            // stale models in the picker that every call then fails to use.
+            state.gatewayModels = [];
+            state.gatewayError = '';
+            if (state.models) await removeProvider(state.models).catch(() => {});
             return json(res, 200, publicStatus());
           }
           if (url.pathname === '/dragonbyte/reconnect' && req.method === 'POST') {
@@ -302,6 +356,25 @@ function apply(ctx, config = {}) {
     for (const dispose of routes) dispose();
     void stop();
   }, 'dragonbyte: routes and bridge');
+
+  // ⚠ OPTIONAL SERVICES ARE INJECTED, NOT DECLARED REQUIRED. `settings` is
+  // disabled on a Host with no profile context (base bundle guards it), so a
+  // required inject would keep this whole plugin — MCP serving included — from
+  // loading on exactly the Hosts that pair machines.
+  // ⚠ A HOST WITHOUT `inject` HAS NO SERVICE GRAPH AT ALL, so there is no model
+  // settings surface to register into. `typeof` rather than a try/catch: the
+  // absence is a fact about the Host, not a failure of the registration.
+  if (typeof ctx.inject === 'function') ctx.inject(['settings', 'credentials'], (scope) => {
+    state.models = { settings: scope.settings, credentials: scope.credentials };
+    // ⚠ THE FIRST SYNC HAPPENS AFTER LOAD, NOT AT APPLY. A credential on disk is
+    // the ordinary case; waiting for a pair would register nothing for a machine
+    // that has been paired for weeks.
+    void load().then(async () => {
+      await refreshGatewayModels();
+      await start();
+    }).catch(() => {});
+    scope.effect(() => () => { state.models = null; }, 'dragonbyte: model registration');
+  });
 
   void load().then(() => start()).catch(() => {});
 }

@@ -55,6 +55,20 @@ export function bridgeUrlOf(env = process.env) {
 }
 
 /**
+ * The plain HTTP origin the bridge's REST routes live on.
+ *
+ * ⚠ THE SOCKET URL'S PATH IS NOT A BASE. `DEFAULT_BRIDGE` ends in `/dragonbyte/ws`,
+ * which is where the WebSocket route is mounted, so appending `/dragonbyte/pair/…`
+ * to it produced `/dragonbyte/ws/dragonbyte/pair/…` — answered 401 by the gateway,
+ * which reads exactly like the machine never signed in.
+ */
+function httpBaseOf(bridgeUrl) {
+  const url = new URL(bridgeUrl);
+  url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+  return url.origin;
+}
+
+/**
  * Ask the bridge for a short-lived editor code, or `''` when it cannot answer.
  *
  * ⚠ THE CODE IS NOT KEPT, BECAUSE IT CANNOT BE. The bridge holds it in memory
@@ -63,7 +77,7 @@ export function bridgeUrlOf(env = process.env) {
  */
 async function editorCodeOf({ bridgeUrl, token, mcpServers }) {
   if (!token) return '';
-  const response = await fetch(`${bridgeUrl.replace(/^ws/, 'http')}/dragonbyte/pair/servers`, {
+  const response = await fetch(`${httpBaseOf(bridgeUrl)}/dragonbyte/pair/servers`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(mcpServers === undefined ? { token } : { token, mcpServers }),
@@ -77,7 +91,7 @@ async function editorCodeOf({ bridgeUrl, token, mcpServers }) {
 }
 
 export function pairPageUrl({ bridgeUrl, code = '', handle = '', tenantId = '', callback = '' }) {
-  const url = new URL('/dragonbyte/pair/start', bridgeUrl.replace(/^ws/, 'http'));
+  const url = new URL('/dragonbyte/pair/start', httpBaseOf(bridgeUrl));
   // ⚠ ONLY THE PARAMETERS THAT EXIST. An empty `tenant` would be sent as a
   // tenant named "", which reads as a choice nobody made.
   if (tenantId) url.searchParams.set('tenant', tenantId);
@@ -175,7 +189,7 @@ function apply(ctx, config = {}) {
       try {
         const code = await editorCodeOf({ bridgeUrl, token: state.credential.token });
         if (code) {
-          const url = `${bridgeUrl.replace(/^ws/, 'http')}/dragonbyte/pair/servers?code=${encodeURIComponent(code)}`;
+          const url = `${httpBaseOf(bridgeUrl)}/dragonbyte/pair/servers?code=${encodeURIComponent(code)}`;
           const response = await fetch(url, { cache: 'no-store' });
           if (response.ok) {
             const body = await response.json();
@@ -243,7 +257,7 @@ function apply(ctx, config = {}) {
    * until it either hands over a code or the window closes.
    */
   async function waitForPairing(handle) {
-    const response = await fetch(`${bridgeUrl.replace(/^ws/, 'http')}/dragonbyte/pair/wait?handle=${encodeURIComponent(handle)}`,
+    const response = await fetch(`${httpBaseOf(bridgeUrl)}/dragonbyte/pair/wait?handle=${encodeURIComponent(handle)}`,
       { cache: 'no-store', signal: AbortSignal.timeout(WAIT_TTL_MS + 30_000) }).catch(() => null);
     if (!response) throw new Error('the bridge could not be reached while pairing');
     const body = await response.json().catch(() => null);
@@ -275,7 +289,7 @@ function apply(ctx, config = {}) {
   }
 
   async function redeem(code) {
-    const response = await fetch(`${bridgeUrl.replace(/^ws/, 'http')}/dragonbyte/pair/redeem`, {
+    const response = await fetch(`${httpBaseOf(bridgeUrl)}/dragonbyte/pair/redeem`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ code }),

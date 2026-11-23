@@ -18,6 +18,7 @@
 import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import { spawn } from 'node:child_process';
+import { hostname } from 'node:os';
 
 import { connectServers, serveBridge } from './host.mjs';
 import { credentialPath, loadCredential, saveCredential, parseServerLine } from './host-main.mjs';
@@ -66,6 +67,21 @@ function httpBaseOf(bridgeUrl) {
   const url = new URL(bridgeUrl);
   url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
   return url.origin;
+}
+
+/**
+ * What this machine calls itself in the tenant's Settings.
+ *
+ * ⚠ THE OS HOSTNAME, NOT A PROMPT. Pairing is a browser round trip and asking a
+ * person to type a name there would add a step to the flow that most needs to
+ * be one click. `DSH_DRAGONBYTE_LABEL` overrides it for a person who runs two
+ * machines whose hostnames look alike.
+ */
+export function labelOf(env = process.env) {
+  const configured = String(env.DSH_DRAGONBYTE_LABEL ?? '').trim();
+  if (configured) return configured.slice(0, 80);
+  try { return String(hostname() || '').slice(0, 80); }
+  catch { return ''; }
 }
 
 /**
@@ -299,7 +315,10 @@ function apply(ctx, config = {}) {
     const response = await fetch(`${httpBaseOf(bridgeUrl)}/dragonbyte/pair/redeem`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ code }),
+      // ⚠ THE NAME IS SENT HERE, BY THE ONLY CALLER THAT KNOWS IT. The browser
+      // signs in and hands over a code; it never learns what this machine is
+      // called, so naming it there would mean asking a person mid-flow.
+      body: JSON.stringify({ code, label: labelOf() }),
     });
     const credential = await response.json().catch(() => null);
     if (!response.ok) throw new Error(credential?.error || 'the pairing code was refused');

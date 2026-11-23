@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { bridgeUrlOf, pairPageUrl, parseServerLines, serverLine } from '../src/desktop.mjs';
+import { bridgeUrlOf, labelOf, pairPageUrl, parseServerLines, serverLine } from '../src/desktop.mjs';
 
 test('the pairing page is built on the bridge origin, not the desktop origin', () => {
   // ⚠ A DESKTOP SHELL SERVES ITS UI FROM `app://`, WHICH FIREBASE WILL NEVER
@@ -72,4 +72,15 @@ test('a server line round-trips through the panel', () => {
   const line = 'fs: npx -y @modelcontextprotocol/server-filesystem ~/docs';
   assert.equal(serverLine(parseServerLines(line)[0]), line);
   assert.equal(serverLine({ name: 'x', transport: 'http', url: 'https://e.test/m' }), 'x: https://e.test/m');
+});
+
+test('the machine names itself by hostname, unless a label is configured', () => {
+  // ⚠ THE NAME REACHES THE TENANT'S SETTINGS, SO IT MUST BE THIS MACHINE'S.
+  // A configured label wins because two machines can share a hostname pattern;
+  // with none, the OS hostname is what a person would recognise in the list.
+  assert.equal(labelOf({ DSH_DRAGONBYTE_LABEL: '  office-mini  ' }), 'office-mini');
+  const fallback = labelOf({});
+  assert.equal(typeof fallback, 'string');
+  assert.notEqual(fallback, '');
+  assert.ok(fallback.length <= 80);
 });

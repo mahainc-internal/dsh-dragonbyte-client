@@ -9,18 +9,30 @@ Two ways to run it, and they install differently:
 | Where | What you get | How it installs |
 | --- | --- | --- |
 | a DSH Desktop (or any DSH Host) | `Settings -> DragonByte`, with pairing, the bridged servers and status | as a DSH **plugin bundle** |
-| a plain machine | a headless host process | `npx -y github:mahainc-internal/dsh-dragonbyte-client` |
+| a plain machine | a headless host process | `npx -y @snapai/dsh-dragonbyte-client` |
 
 ## In DSH Desktop
 
+Install the bundle through the Plugin Manager, or point it at the npm package:
+
 ```
-Plugin Manager -> install  github:mahainc-internal/dsh-dragonbyte-client
+Plugin Manager -> install  @snapai/dsh-dragonbyte-client
 Settings -> DragonByte -> Pair this machine
 ```
+
+`github:mahainc-internal/dsh-dragonbyte-client` still works as an install
+source, but the published npm package is what a release ships.
 
 Pairing opens your browser on `edge01.snapai.app`, where you sign in with the
 Google account that owns the DSH tenants. Approve it and the machine comes back
 paired. There is nothing to copy and no token to paste.
+
+**Once paired, the pair button is gone and the panel names the machine.** A
+second pairing would mint a second device record for a machine that already has
+one, so a paired machine offers **Reconnect** and **Disconnect** instead. The
+name shown is this machine's OS hostname — the same one the tenant's device list
+shows — overridden by `DSH_DRAGONBYTE_LABEL` when two machines have alike
+hostnames.
 
 **A paired machine serves every tenant that account owns.** There is no tenant
 picker: which tenants an address owns is a registry question the bridge answers
@@ -47,7 +59,7 @@ the one-time code that comes back.
 
 ```sh
 # in a DSH tenant: Settings -> DragonByte -> Create token, then:
-npx -y github:mahainc-internal/dsh-dragonbyte-client
+npx -y @snapai/dsh-dragonbyte-client
 #    paste the token; answer once for each MCP server
 ```
 
@@ -137,7 +149,8 @@ npm test
 ```
 
 The tests cover the socket protocol, the credential file, the settings exchange,
-the no-prompt exit path, and how the pairing page URL is built. The pairing
+the `/dragonbyte/status` route the panel reads (including the machine name it
+renders), the no-prompt exit path, and how the pairing page URL is built. The pairing
 endpoint, the Firebase token check and the device store live in the tenant-side
 [`dsh-dragonbyte`](../dsh-dragonbyte) package, because they run on edge01.
 

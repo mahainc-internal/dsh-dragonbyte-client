@@ -10,6 +10,8 @@ window.__ModuleLoader__.load({
       'Pair this machine': '配对此机器',
       'Pairing…': '正在配对…',
       'Paired': '已配对',
+      'Machine': '机器',
+      'This machine': '此机器',
       'Not paired yet.': '尚未配对。',
       'Open Google sign-in in your browser, approve this machine, then come back.': '在浏览器中打开 Google 登录，批准此机器后返回。',
       'Keep this window open. Finish the sign-in in your browser; this finishes on its own.': '请保持此窗口打开。在浏览器中完成登录，此处会自动完成。',
@@ -65,7 +67,7 @@ window.__ModuleLoader__.load({
 
     function DragonbyteSection({ t }) {
       const base = React.useMemo(hostBase, []);
-      const [state, setState] = React.useState({ loading: true, status: 'idle', servers: '', paired: false, tenantId: '' });
+      const [state, setState] = React.useState({ loading: true, status: 'idle', servers: '', paired: false, tenantId: '', label: '' });
       const [draft, setDraft] = React.useState('');
       // ⚠ A REFRESH MUST NOT EAT A HALF-TYPED LINE. The field takes the host's
       // value until the person types in it; a save clears this again.
@@ -143,18 +145,22 @@ window.__ModuleLoader__.load({
         error ? h('p', { className: 'muted', role: 'alert' }, t(error)) : null,
 
         h('div', { className: 'group' },
-          h('h3', null, t('Pair this machine')),
+          // ⚠ THE HEADING FOLLOWS THE STATE. "Pair this machine" over a row
+          // with no pair button reads like the button failed to load.
+          h('h3', null, t(state.paired ? 'This machine' : 'Pair this machine')),
           h('div', { className: 'row' },
             h('div', { className: 'detail' },
               h('p', { className: 'muted' },
-                state.paired ? `${t('Paired')} · ${state.tenantId || '—'} · ${t(statusLabel)}` : t('Not paired yet.')),
+                state.paired
+                  ? `${t('Paired')} · ${state.label || t('Machine')} · ${state.tenantId || '—'} · ${t(statusLabel)}`
+                  : t('Not paired yet.')),
               h('p', { className: 'muted' }, t('Keep this window open. Finish the sign-in in your browser; this finishes on its own.'))),
             h('div', { className: 'actions' },
-              // ⚠ ENABLED WITH NO TENANT KNOWN, DELIBERATELY. Which tenant an
-              // address owns is answered only after sign-in, on the pairing
-              // page, so requiring one here would make the flow impossible to
-              // start. An already-paired machine keeps its tenant.
-              h('button', { type: 'button', disabled: busy !== '', onClick: () => void pair() },
+              // ⚠ NO PAIR BUTTON ONCE THIS MACHINE IS PAIRED. Pairing again
+              // would mint a second device record for a machine that already
+              // has one. A paired machine that lost its connection is fixed
+              // with Reconnect, or by Disconnect and pairing afresh.
+              state.paired ? null : h('button', { type: 'button', disabled: busy !== '', onClick: () => void pair() },
                 busy === 'pair' ? t('Pairing…') : t('Pair this machine')),
               state.paired ? h('button', { type: 'button', disabled: busy !== '', onClick: () => void call('reconnect', { method: 'POST' }).catch(() => setError('Could not reach the local host.')) },
                 t('Reconnect')) : null,

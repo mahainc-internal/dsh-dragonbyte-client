@@ -358,6 +358,11 @@ function apply(ctx, config = {}) {
     ...(state.error ? { error: state.error } : {}),
     tenantId: state.credential?.tenantId || '',
     paired: Boolean(state.credential?.token),
+    // ⚠ THE NAME THE TENANT SAW AT PAIRING, SHOWN BACK HERE. It is the same
+    // `labelOf()` sent to the bridge in `pair`, so Settings names this machine
+    // exactly as the tenant's device list does. A person running two machines
+    // with alike hostnames sets `DSH_DRAGONBYTE_LABEL` to tell them apart.
+    label: labelOf(),
     // The list as text, because this panel is where it is typed. The credential
     // holds specs; the panel holds one line per server.
     servers: (state.credential?.mcpServers ?? []).map(serverLine).join('\n'),

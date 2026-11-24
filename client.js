@@ -33,6 +33,12 @@ window.__ModuleLoader__.load({
       'Could not reach the local host.': '无法连接本地主机。',
       'Could not pair. Try again.': '无法配对，请重试。',
       'Revoking…': '正在撤销…',
+      'AI gateway': 'AI 网关',
+      'Gateway address': '网关地址',
+      'Save gateway': '保存网关',
+      'Default': '默认',
+      'An empty address means the deployment default.': '留空表示使用部署默认值。',
+      'Could not save the gateway. Check the address and retry.': '无法保存网关，请检查地址后重试。',
     };
     const en = Object.fromEntries(Object.keys(zh).map((key) => [key, key]));
     const css = `
@@ -48,6 +54,8 @@ window.__ModuleLoader__.load({
       .dsh-dragonbyte .actions { display: flex; flex-wrap: wrap; gap: 12px; }
       .dsh-dragonbyte textarea { width: 100%; min-height: 96px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.5; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); }
       .dsh-dragonbyte textarea:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
+      .dsh-dragonbyte input[type="url"] { width: 100%; min-height: 36px; padding: 7px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; }
+      .dsh-dragonbyte input[type="url"]:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
       .dsh-dragonbyte textarea.json { white-space: pre; overflow-wrap: normal; overflow-x: auto; tab-size: 2; }
       .dsh-dragonbyte .link { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 7px 14px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); font-size: 13px; text-decoration: none; }
       .dsh-dragonbyte .link:hover { background: var(--dsw-alias-interactive-bg-hover); }
@@ -72,11 +80,13 @@ window.__ModuleLoader__.load({
 
     function DragonbyteSection({ t }) {
       const base = React.useMemo(hostBase, []);
-      const [state, setState] = React.useState({ loading: true, status: 'idle', servers: '', paired: false, tenantId: '', label: '' });
+      const [state, setState] = React.useState({ loading: true, status: 'idle', servers: '', paired: false, tenantId: '', label: '', aiGateway: '', aiGatewayIsDefault: true });
       const [draft, setDraft] = React.useState('');
+      const [gateway, setGateway] = React.useState('');
       // ⚠ A REFRESH MUST NOT EAT A HALF-TYPED LINE. The field takes the host's
       // value until the person types in it; a save clears this again.
       const edited = React.useRef(false);
+      const gatewayEdited = React.useRef(false);
       const [error, setError] = React.useState('');
       const [busy, setBusy] = React.useState('');
 
@@ -87,6 +97,10 @@ window.__ModuleLoader__.load({
           const payload = await response.json();
           setState({ loading: false, ...payload });
           if (!edited.current) setDraft(payload.servers);
+          // ⚠ AN UNCHANGED FIELD SHOWS "DEFAULT" AS A PLACEHOLDER, NOT AS TEXT.
+          // Pre-filling the default would make a save without an edit pin it
+          // explicitly, which is the state the empty field already means.
+          if (!gatewayEdited.current) setGateway(payload.aiGatewayIsDefault ? '' : payload.aiGateway);
           setError('');
         } catch (failure) {
           if (!signal?.aborted) { setState((s) => ({ ...s, loading: false })); setError(failure.message || 'Could not reach the local host.'); }
@@ -141,6 +155,19 @@ window.__ModuleLoader__.load({
         finally { setBusy(''); }
       }
 
+      async function saveGateway() {
+        setBusy('gateway');
+        try {
+          await call('gateway', {
+            method: 'PUT', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ url: gateway }),
+          }, { adopt: false });
+          gatewayEdited.current = false;
+          setError('');
+        } catch (failure) { setError(failure.message || 'Could not save the gateway. Check the address and retry.'); }
+        finally { setBusy(''); void load(); }
+      }
+
       const statusLabel = STATUS_LABEL[state.status] || 'Not connected';
 
       return h('section', { className: 'dsh-dragonbyte' },
@@ -190,10 +217,10 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', disabled: busy !== '', onClick: () => void save() },
               busy === 'save' ? t('Saving…') : t('Save servers')))),
 
-        // ⚠ THERE IS NO GATEWAY CONTROL HERE. Pairing is the whole configuration:
-        // this machine's device token is what the gateway accepts, and the plugin
-        // registers the models itself. The row only reports whether that worked,
-        // because a silent failure would look like a gateway with no models.
+        // ⚠ THE ADDRESS IS EDITABLE, THE ROUTE IS NOT. Pairing supplies the
+        // token; this field only says which gateway it is spent at, so a machine
+        // pointed at a self-hosted deployment stays configurable here without
+        // ever minting a second credential.
         h('div', { className: 'group' },
           h('h3', null, t('AI models')),
           h('p', { className: 'muted' }, state.modelCount
@@ -204,7 +231,20 @@ window.__ModuleLoader__.load({
             : null,
           state.modelsUnavailable
             ? h('p', { className: 'muted' }, t('This Host has no model settings.'))
-            : null));
+            : null,
+          h('h3', null, t('AI gateway')),
+          h('p', { className: 'muted' }, t('An empty address means the deployment default.')),
+          h('input', {
+            type: 'url', inputMode: 'url', spellCheck: false,
+            // ⚠ THE DEFAULT IS SHOWN AS A PLACEHOLDER so an empty field still
+            // says which gateway it will use, without saving that address.
+            value: gateway, placeholder: state.aiGateway || t('Default'),
+            onChange: (event) => { gatewayEdited.current = true; setGateway(event.target.value); },
+            'aria-label': t('Gateway address'),
+          }),
+          h('div', { className: 'actions' },
+            h('button', { type: 'button', disabled: busy !== '', onClick: () => void saveGateway() },
+              busy === 'gateway' ? t('Saving…') : t('Save gateway')))));
     }
 
     return {

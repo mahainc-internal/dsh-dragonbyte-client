@@ -18,7 +18,7 @@
 import { connectServers, serveBridge } from './host.mjs';
 import { credentialPath, loadCredential, saveCredential, specsFromConfig } from './host-main.mjs';
 import { editorCodeOf, httpBaseOf, labelOf, pairPageUrl, pairWithBrowser } from './pair.mjs';
-import { fetchGatewayModels, syncProvider, removeProvider } from './provider.mjs';
+import { fetchGatewayModels, normalizeGatewayUrl, GATEWAY_BASE_URL, syncProvider, removeProvider } from './provider.mjs';
 
 export const name = 'dragonbyte';
 // ⚠ `settings` AND `credentials` ARE OPTIONAL, NOT REQUIRED. They are what makes
@@ -28,8 +28,8 @@ export const name = 'dragonbyte';
 // when the Host has no model settings surface.
 export const inject = ['webServer'];
 
-// The gateway's models are not a panel setting any more — the address is a fact
-// about this deployment, and the token is the one pairing already minted.
+// The address the machine registers against is the deployment's by default and
+// a Settings field when someone runs another gateway.
 export { GATEWAY_BASE_URL as DEFAULT_AI_GATEWAY } from './provider.mjs';
 
 const badRequest = (message) => Object.assign(new Error(message), { status: 400 });
@@ -127,16 +127,46 @@ function apply(ctx, config = {}) {
     gatewayError: '',
   };
 
+  // ⚠ A LOAD IN FLIGHT MUST NOT OVERWRITE A SAVE THAT LANDED WHILE IT READ.
+  // `load()` runs at apply and again after pairing; the read is asynchronous,
+  // so a save that completes in between would be clobbered by the older copy
+  // the load had already asked for — the field would snap back to the previous
+  // value and the save would look ignored. Every in-memory change bumps this.
+  let credentialVersion = 0;
+
   async function load() {
-    try { state.credential = await loadCredential(); }
+    const version = credentialVersion;
+    try {
+      const value = await loadCredential();
+      if (version === credentialVersion) state.credential = value;
+    }
     catch (error) { state.error = error?.message || String(error); state.status = 'error'; }
   }
+
+  /** Assign and persist in one step, so a load in flight cannot undo it. */
+  async function commitCredential(value) {
+    credentialVersion += 1;
+    state.credential = value;
+    await saveCredential(value);
+  }
+
+  /**
+   * The gateway this machine will register and ask.
+   *
+   * ⚠ A SAVED ADDRESS WINS OVER THE DEPLOYMENT DEFAULT, AND NOTHING IS WRITTEN
+   * HERE. The choice lives in the credential because that is the one file that
+   * already belongs to this machine; reading it per use is what lets a person
+   * change the address and have the next refresh, restart or reconnect follow
+   * it without a migration.
+   */
+  const gatewayUrl = () => state.credential?.aiGateway || GATEWAY_BASE_URL;
 
   /** Ask the gateway what models this device token may use, then register them. */
   async function refreshGatewayModels({ fetchImpl = fetch } = {}) {
     if (!state.credential?.token) return;
+    const baseURL = gatewayUrl();
     try {
-      const { models } = await fetchGatewayModels(state.credential.token, { fetchImpl });
+      const { models } = await fetchGatewayModels(state.credential.token, { baseURL, fetchImpl });
       state.gatewayModels = models;
       state.gatewayError = '';
     } catch (error) {
@@ -150,7 +180,7 @@ function apply(ctx, config = {}) {
     // remove it — `syncProvider` decides from `gatewayModels` alone.
     if (state.models && state.credential?.token) {
       try {
-        await syncProvider({ settings: state.models.settings, credentials: state.models.credentials, token: state.gatewayModels.length ? state.credential.token : '', models: state.gatewayModels });
+        await syncProvider({ settings: state.models.settings, credentials: state.models.credentials, token: state.gatewayModels.length ? state.credential.token : '', models: state.gatewayModels, baseURL });
       } catch (error) {
         state.gatewayError = error?.message || String(error);
       }
@@ -188,8 +218,7 @@ function apply(ctx, config = {}) {
             // every server means to share none; keeping the cached copy would
             // publish a list they just removed.
             if (Array.isArray(body?.mcpServers)) {
-              state.credential.mcpServers = body.mcpServers;
-              await saveCredential(state.credential);
+              await commitCredential({ ...(state.credential ?? {}), mcpServers: body.mcpServers });
             }
           }
         }
@@ -247,8 +276,11 @@ function apply(ctx, config = {}) {
       expiresAt: credential.expiresAt,
       tenantId: credential.tenantId,
       mcpServers: state.credential?.mcpServers ?? [],
+      // ⚠ THE GATEWAY SURVIVES A RE-PAIR. It is a property of this machine's
+      // configuration, not of the token being replaced.
+      ...(state.credential?.aiGateway ? { aiGateway: state.credential.aiGateway } : {}),
     };
-    await saveCredential(state.credential);
+    await commitCredential(state.credential);
     await start();
     void refreshGatewayModels();
     return { tenantId: state.credential.tenantId };
@@ -271,8 +303,7 @@ function apply(ctx, config = {}) {
     const token = String(text ?? '').trim();
     if (!token) throw badRequest('a device token is required');
     if (!/^dbt1[.A-Za-z0-9_-]+$/.test(token)) throw badRequest('that is not a device token (it should start with dbt1)');
-    state.credential = { token, refreshToken: '', expiresAt: 0, tenantId: '', mcpServers: state.credential?.mcpServers ?? [] };
-    await saveCredential(state.credential);
+    await commitCredential({ token, refreshToken: '', expiresAt: 0, tenantId: '', mcpServers: state.credential?.mcpServers ?? [], ...(state.credential?.aiGateway ? { aiGateway: state.credential.aiGateway } : {}) });
     await start();
     void refreshGatewayModels();
   }
@@ -295,9 +326,25 @@ function apply(ctx, config = {}) {
     // Error here would report "the bridge refused that server list" as an
     // internal failure and lose the one sentence that says what to fix.
     await editorCodeOf({ bridgeUrl, token: state.credential?.token, mcpServers: specs, fail: badRequest });
-    state.credential = { ...(state.credential ?? {}), mcpServers: specs };
-    await saveCredential(state.credential);
+    await commitCredential({ ...(state.credential ?? {}), mcpServers: specs });
     await start();
+  }
+
+  /**
+   * Point this machine at another AI gateway and register its models there.
+   *
+   * ⚠ THE ADDRESS IS SAVED BEFORE IT IS TESTED, AND AN ANSWER THAT FAILS IS
+   * REPORTED, NOT REVERTED. A gateway still being brought up is a reason to
+   * keep the address and show its error, not to silently go back to a host the
+   * person just said is wrong; the field and the error sentence together say
+   * what is saved and what it did.
+   */
+  async function saveGateway(text) {
+    let baseURL;
+    try { baseURL = normalizeGatewayUrl(text); }
+    catch (error) { throw badRequest(error.message); }
+    await commitCredential({ ...(state.credential ?? {}), aiGateway: baseURL });
+    await refreshGatewayModels();
   }
 
   const publicStatus = () => ({
@@ -305,6 +352,10 @@ function apply(ctx, config = {}) {
     ...(state.error ? { error: state.error } : {}),
     tenantId: state.credential?.tenantId || '',
     paired: Boolean(state.credential?.token),
+    // ⚠ THE GATEWAY IS AN ADDRESS A PERSON MAY CHANGE. It is shown in the same
+    // text form the route accepts, so the panel edits what it displays.
+    aiGateway: gatewayUrl(),
+    aiGatewayIsDefault: !state.credential?.aiGateway,
     // ⚠ THE NAME THE TENANT SAW AT PAIRING, SHOWN BACK HERE. It is the same
     // `labelOf()` sent to the bridge in `pair`, so Settings names this machine
     // exactly as the tenant's device list does. A person running two machines
@@ -314,10 +365,10 @@ function apply(ctx, config = {}) {
     // is edited. The credential holds specs; the panel holds `.mcp.json` text.
     servers: serverConfigText(state.credential?.mcpServers),
     credentialPath: credentialPath(),
-    // ⚠ A COUNT, NOT THE MODELS. The panel does not choose or configure the
-    // gateway any more; it reports that pairing produced models, and a failure
-    // sentence when it did not, so a person can tell "paired but the gateway
-    // refused this token" from "paired and working".
+    // ⚠ A COUNT, NOT THE MODELS. The panel edits which gateway is asked and
+    // reports whether asking produced models, with a failure sentence when it
+    // did not, so a person can tell "paired but the gateway refused this token"
+    // from "paired and working".
     modelCount: state.gatewayModels.length,
     ...(state.models ? {} : { modelsUnavailable: 'this Host has no model settings' }),
     ...(state.gatewayError ? { gatewayError: state.gatewayError } : {}),
@@ -346,9 +397,13 @@ function apply(ctx, config = {}) {
             await saveServers(typeof body?.text === 'string' ? body.text : '');
             return json(res, 200, publicStatus());
           }
+          if (url.pathname === '/dragonbyte/gateway' && req.method === 'PUT') {
+            const body = await readBody(req);
+            await saveGateway(typeof body?.url === 'string' ? body.url : '');
+            return json(res, 200, publicStatus());
+          }
           if (url.pathname === '/dragonbyte/credential' && req.method === 'DELETE') {
-            state.credential = { token: '', refreshToken: '', expiresAt: 0, tenantId: '', mcpServers: state.credential?.mcpServers ?? [] };
-            await saveCredential(state.credential);
+            await commitCredential({ token: '', refreshToken: '', expiresAt: 0, tenantId: '', mcpServers: state.credential?.mcpServers ?? [], ...(state.credential?.aiGateway ? { aiGateway: state.credential.aiGateway } : {}) });
             await stop();
             // ⚠ DISCONNECT WITHDRAWS THE MODELS TOO. The device token was the
             // provider's only credential; leaving the route behind would keep

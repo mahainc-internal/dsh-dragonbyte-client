@@ -12,7 +12,7 @@ import test from 'node:test';
 
 import {
   API_KEY_REF, CONTEXT_WINDOW, GATEWAY_BASE_URL, INPUT_MODALITIES, PROVIDER_ROUTE,
-  fetchGatewayModels, providerProfile, readModelIds, removeProvider, sameModels, syncProvider,
+  fetchGatewayModels, normalizeGatewayUrl, providerProfile, readModelIds, removeProvider, sameModels, syncProvider,
 } from '../src/provider.mjs';
 
 /** A settings/credentials pair that records writes, with a pre-seeded section. */
@@ -45,6 +45,37 @@ function fakeModelServices({ providers = {}, configured = false } = {}) {
 
 test('the gateway address keeps the port that this deployment answers on', () => {
   assert.equal(GATEWAY_BASE_URL, 'https://io.snapai.app:8443/v1');
+});
+
+test('a typed gateway address becomes the /v1 root a request can append to', () => {
+  // ⚠ A BARE HOST IS THE ORDINARY PASTE, AND IT MEANS THE DEPLOYMENT ROOT.
+  // Without this, `/models` would go to `/models` on the origin and come back
+  // as an empty catalog — a message about the symptom, not about the address.
+  assert.equal(normalizeGatewayUrl('https://io.snapai.app:8443'), 'https://io.snapai.app:8443/v1');
+  assert.equal(normalizeGatewayUrl('  https://gw.example.test/v1/  '), 'https://gw.example.test/v1');
+  assert.equal(normalizeGatewayUrl('https://gw.example.test/api/openai/'), 'https://gw.example.test/api/openai');
+  // ⚠ EMPTY IS THE DEFAULT, NOT AN ERROR: clearing the field is how a person
+  // goes back to the deployment's own address.
+  assert.equal(normalizeGatewayUrl(''), '');
+  assert.equal(normalizeGatewayUrl(null), '');
+});
+
+test('an unusable gateway address is refused instead of being sent', () => {
+  assert.throws(() => normalizeGatewayUrl('io.snapai.app:8443'), /start with http/);
+  assert.throws(() => normalizeGatewayUrl('ftp://gw.example.test'), /http/);
+  assert.throws(() => normalizeGatewayUrl('https://gw.example.test/v1?token=x'), /query or fragment/);
+});
+
+test('a plain http gateway is only accepted on this machine', () => {
+  // ⚠ THE DEVICE TOKEN TRAVELS WITH EVERY REQUEST, so a cleartext address is a
+  // token handed to every hop between here and there. Loopback is the one
+  // address where there is no hop.
+  assert.throws(() => normalizeGatewayUrl('http://gw.example.test:8080/v1'), /only accepted on this machine/);
+  assert.throws(() => normalizeGatewayUrl('http://10.0.0.5:8080'), /only accepted on this machine/);
+  assert.equal(normalizeGatewayUrl('http://localhost:8080'), 'http://localhost:8080/v1');
+  assert.equal(normalizeGatewayUrl('http://127.0.0.1:8080/v1'), 'http://127.0.0.1:8080/v1');
+  // The default deployment is https, so it is unaffected.
+  assert.equal(normalizeGatewayUrl('https://gw.example.test'), 'https://gw.example.test/v1');
 });
 
 test('model ids are deduplicated and blank entries dropped', () => {
@@ -120,6 +151,19 @@ test('a refused token or an empty catalog is an error, never a silent success', 
   await assert.rejects(() => fetchGatewayModels('t', { fetchImpl: empty }), /listed no models/);
 });
 
+test('a changed gateway address rewrites the route, even with the same models', async () => {
+  // ⚠ THE ADDRESS IS PART OF THE SECTION, SO IT IS PART OF "UNCHANGED". A
+  // comparison on ids alone would leave the old baseURL in the profile and the
+  // next model call would go to the old gateway.
+  const services = fakeModelServices();
+  await syncProvider({ ...services, token: 't', models: ['m-1'] });
+  assert.equal(services.writes.updates.at(-1).patch.providers.dragonbyte.baseURL, GATEWAY_BASE_URL);
+  const moved = await syncProvider({ ...services, token: 't', models: ['m-1'], baseURL: 'https://gw.example.test/v1' });
+  assert.equal(moved, 'applied');
+  assert.equal(services.writes.updates.at(-1).patch.providers.dragonbyte.baseURL, 'https://gw.example.test/v1');
+  assert.equal(await syncProvider({ ...services, token: 't', models: ['m-1'], baseURL: 'https://gw.example.test/v1' }), 'unchanged');
+});
+
 test('the device token is sent as a bearer to the /models route', async () => {
   const seen = [];
   const ok = async (url, init) => {
@@ -129,4 +173,14 @@ test('the device token is sent as a bearer to the /models route', async () => {
   const { models } = await fetchGatewayModels('dbt1.a.b', { fetchImpl: ok });
   assert.deepEqual(models, ['m-1']);
   assert.deepEqual(seen, [{ url: `${GATEWAY_BASE_URL}/models`, auth: 'Bearer dbt1.a.b' }]);
+});
+
+test('a configured gateway is what the model list is asked of', async () => {
+  const seen = [];
+  const ok = async (url) => {
+    seen.push(url);
+    return { ok: true, status: 200, json: async () => ({ data: [{ id: 'm-1' }] }) };
+  };
+  await fetchGatewayModels('dbt1.a.b', { baseURL: 'https://gw.example.test/v1', fetchImpl: ok });
+  assert.deepEqual(seen, ['https://gw.example.test/v1/models']);
 });

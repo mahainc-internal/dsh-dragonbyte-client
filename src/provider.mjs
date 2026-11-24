@@ -12,8 +12,44 @@
 // credential store under `apiKeyEnv`'s name; pi-ai resolves it per request, so a
 // rotated token reaches the next call without touching this section.
 
-/** The gateway's `/v1` root. The port is part of the address — see `desktop.mjs`. */
+/** The gateway's `/v1` root this deployment answers on, when nobody chose another. */
 export const GATEWAY_BASE_URL = 'https://io.snapai.app:8443/v1';
+
+/**
+ * What a person typed in Settings -> the base URL this module appends to.
+ *
+ * ⚠ A BARE HOST MEANS THE DEPLOYMENT ROOT, WHICH SERVES `/v1`. Pasting
+ * `https://host:8443` is the ordinary mistake; sending `/models` to it would
+ * ask a route that does not exist and report "listed no models", which names
+ * the symptom rather than the fix.
+ *
+ * ⚠ THE TOKEN THIS SAVES IS SPENT AT THAT HOST. The bearer sent to `/models` is
+ * this machine's `dbt1` device token — the same one the bridge accepts for the
+ * server list and pairing state — so a plain `http:` address hands it to every
+ * hop in between. Loopback is the one place that is not a downgrade, and it is
+ * also how a self-hosted gateway is usually reached on the same machine.
+ *
+ * @returns the normalized base URL, or `''` for an empty field (meaning: default).
+ */
+export function normalizeGatewayUrl(text) {
+  const raw = String(text ?? '').trim();
+  if (!raw) return '';
+  let url;
+  try { url = new URL(raw); }
+  catch { throw new Error('the AI gateway address is not a URL'); }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('the AI gateway address must start with http:// or https://');
+  if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) throw new Error('a plain http:// gateway is only accepted on this machine (localhost or 127.0.0.1), because the device token is sent with every request');
+  if (url.search || url.hash) throw new Error('the AI gateway address must not carry a query or fragment');
+  const path = url.pathname.replace(/\/+$/, '');
+  url.pathname = path === '' ? '/v1' : path;
+  return url.toString().replace(/\/$/, '');
+}
+
+/** `localhost`, `127.0.0.1`, `[::1]` — the names that do not leave this machine. */
+function isLoopbackHost(hostname) {
+  const host = String(hostname ?? '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
+}
 
 /** The provider route this plugin owns. A stable key is what makes removal possible. */
 export const PROVIDER_ROUTE = 'dragonbyte';
@@ -58,10 +94,10 @@ export function readModelIds(body) {
 }
 
 /** The `llm-pi-ai` profile for this route. */
-export function providerProfile(modelIds) {
+export function providerProfile(modelIds, baseURL = GATEWAY_BASE_URL) {
   return {
     api: PROTOCOL,
-    baseURL: GATEWAY_BASE_URL,
+    baseURL,
     displayName: 'DragonByte',
     apiKeyEnv: API_KEY_REF,
     models: modelIds.map((id) => ({
@@ -74,8 +110,9 @@ export function providerProfile(modelIds) {
   };
 }
 
-/** Whether a `llm-pi-ai` section already names a route with the same models. */
-export function sameModels(current, modelIds) {
+/** Whether a `llm-pi-ai` section already names a route with the same models at the same address. */
+export function sameModels(current, modelIds, baseURL = GATEWAY_BASE_URL) {
+  if (current?.baseURL !== baseURL) return false;
   const models = Array.isArray(current?.models) ? current.models : [];
   if (models.length !== modelIds.length) return false;
   return models.every((model, index) => model?.id === modelIds[index]);
@@ -86,8 +123,8 @@ export function sameModels(current, modelIds) {
  *
  * @returns `{ models }` on success; throws with a human-readable message otherwise.
  */
-export async function fetchGatewayModels(token, { fetchImpl = globalThis.fetch, timeoutMs = 15_000 } = {}) {
-  const url = `${GATEWAY_BASE_URL}/models`;
+export async function fetchGatewayModels(token, { baseURL = GATEWAY_BASE_URL, fetchImpl = globalThis.fetch, timeoutMs = 15_000 } = {}) {
+  const url = `${baseURL}/models`;
   let response;
   try {
     response = await fetchImpl(url, {
@@ -115,14 +152,14 @@ export async function fetchGatewayModels(token, { fetchImpl = globalThis.fetch, 
  *
  * @returns `'applied' | 'unchanged' | 'removed' | 'absent'`.
  */
-export async function syncProvider({ settings, credentials, token, models }) {
+export async function syncProvider({ settings, credentials, token, models, baseURL = GATEWAY_BASE_URL }) {
   if (!token || !Array.isArray(models) || models.length === 0) return removeProvider({ settings, credentials });
   const current = (await settings.describe())?.find((row) => row.ns === 'llm-pi-ai');
   const existing = current?.value?.providers?.[PROVIDER_ROUTE];
   const needsCredential = await credentialNeedsWrite(credentials);
-  if (existing && sameModels(existing, models) && !needsCredential) return 'unchanged';
+  if (existing && sameModels(existing, models, baseURL) && !needsCredential) return 'unchanged';
   await credentials.set(API_KEY_REF, token);
-  await settings.update('llm-pi-ai', { providers: { [PROVIDER_ROUTE]: providerProfile(models) } });
+  await settings.update('llm-pi-ai', { providers: { [PROVIDER_ROUTE]: providerProfile(models, baseURL) } });
   return 'applied';
 }
 

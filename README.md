@@ -52,8 +52,17 @@ empty catalog.
 
 **Pairing is the whole configuration.** The device token this machine already
 holds is a credential the DSH AI gateway accepts, so once paired the plugin adds
-the gateway's models to DSH's model picker on its own. There is no address to
-type and no second sign-in.
+the gateway's models to DSH's model picker on its own. There is no second
+sign-in.
+
+**The gateway address is optional, and editable in Settings.** Leave it empty to
+use this deployment's own gateway (`https://io.snapai.app:8443/v1`), or type
+another one — a bare host such as `https://gw.example.test:8443` means that
+host's `/v1` root. **Save gateway** stores the address in the local credential
+and re-reads that gateway's model list before registering them, so the picker
+follows the one you chose. The setting belongs to the machine, not the token:
+pairing again or disconnecting leaves the chosen address in place, and clearing
+the field returns to the default.
 
 Every model is registered with a 400,000-token context window and both `text`
 and `image` input, because the gateway's model list reports neither.

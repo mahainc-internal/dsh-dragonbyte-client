@@ -297,3 +297,22 @@ test('the entrypoint runs through an installed bin symlink', async () => {
   assert.equal(code, 0);
   assert.match(out, /usage: dsh-dragonbyte-host/, 'an installed bin must actually run the entrypoint');
 });
+
+test('a catalog as big as a real machine list is accepted, not silenced by a size cap', () => {
+  // ⚠ MEASURED 2026-11-25: one paired Mac mini publishes ios 17 KiB, ipa 1 KiB,
+  // openchatcut 218 KiB and a 75-tool agent-desktop -- 244 tools. The old
+  // 256 KiB / 256-tool ceilings refused it, and because validateCatalog throws
+  // before the socket sends anything, the tenant lost every machine's tools
+  // instead of just the large server's. This pins the ceiling above that list.
+  const tool = (i) => ({ name: `tool_${i}`, description: 'x'.repeat(1200), inputSchema: { type: 'object' } });
+  const servers = [
+    { name: 'ios', tools: Array.from({ length: 35 }, (_, i) => tool(i)) },
+    { name: 'ipa', tools: Array.from({ length: 2 }, (_, i) => tool(i)) },
+    { name: 'openchatcut', tools: Array.from({ length: 132 }, (_, i) => tool(i)) },
+    { name: 'agent-desktop', tools: Array.from({ length: 75 }, (_, i) => tool(i)) },
+  ];
+  const catalog = validateCatalog({ servers });
+  const bytes = Buffer.byteLength(JSON.stringify(catalog));
+  assert.ok(bytes > 256 * 1024, `the fixture must exceed the old ceiling (${bytes} bytes)`);
+  assert.equal(catalog.servers.reduce((n, s) => n + s.tools.length, 0), 244);
+});

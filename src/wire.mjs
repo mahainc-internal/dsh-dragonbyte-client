@@ -18,10 +18,19 @@ export { frameSchema, validate as validateSchema } from './schema.mjs';
 import PROTOCOL from './protocol.v1.json' with { type: 'json' };
 import { frameSchema, validate as validateSchema } from './schema.mjs';
 
-export const MAX_CATALOG_BYTES = 256 * 1024;
+// ⚠ A CATALOG IS THE SUM OF EVERY SERVER A MACHINE RUNS, AND ONE OF THEM IS
+// BIG. Measured 2026-11-25 on a paired Mac mini: ios 17 KiB, ipa 1 KiB,
+// openchatcut 218 KiB, plus a 75-tool agent-desktop -- 244 tools, over both the
+// old 256 KiB and 256-tool ceilings, and one oversized server cost the tenant
+// *every* machine's tools because the host could not publish the catalog at all.
+// The ceiling is a wire safety bound, not a product limit, so it is set well
+// above what a realistic machine list needs; a catalog small enough to fit but
+// too large to be sane is still refused by the scheme validators below.
+export const MAX_CATALOG_BYTES = 4 * 1024 * 1024;
+export const MAX_CATALOG_TOOLS = 2048;
 export const MAX_ARGS_BYTES = 512 * 1024;
 export const MAX_RESULT_BYTES = 4 * 1024 * 1024;
-export const MAX_FRAME_BYTES = MAX_RESULT_BYTES + 64 * 1024;
+export const MAX_FRAME_BYTES = Math.max(MAX_RESULT_BYTES, MAX_CATALOG_BYTES) + 64 * 1024;
 
 const EMAIL_PATTERN = /^[^\s@]{1,64}@[^\s@]{1,190}$/;
 // Mirrors the `mcp__<server>__<tool>` shape dsh-mcp-oauth already publishes, so
@@ -102,9 +111,11 @@ export function validateCatalog(catalog) {
     return { name: server.name, label: String(server.label ?? server.name).slice(0, 80), tools: entries };
   });
   if (tools === 0) throw invalid('catalog carries no tools');
-  if (tools > 256) throw invalid('catalog carries more than 256 tools');
+  if (tools > MAX_CATALOG_TOOLS) throw invalid(`catalog carries more than ${MAX_CATALOG_TOOLS} tools`);
   const value = { servers };
-  if (Buffer.byteLength(JSON.stringify(value)) > MAX_CATALOG_BYTES) throw invalid('catalog exceeds 256 KiB');
+  if (Buffer.byteLength(JSON.stringify(value)) > MAX_CATALOG_BYTES) {
+    throw invalid(`catalog exceeds ${Math.round(MAX_CATALOG_BYTES / 1024)} KiB`);
+  }
   return value;
 }
 
